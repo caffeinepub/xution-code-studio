@@ -4,18 +4,28 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useInternetIdentity } from "@/hooks/useInternetIdentity";
-import { useCallerProfile, useIsAdmin } from "@/hooks/useQueries";
+import {
+  useCallerProfile,
+  useIsAdmin,
+  useLogo,
+  useSetLogo,
+} from "@/hooks/useQueries";
 import {
   Brain,
+  Camera,
   ChevronDown,
   Code2,
-  LayoutDashboard,
+  Home,
+  Loader2,
   LogOut,
   Users,
 } from "lucide-react";
+import { useRef } from "react";
+import { toast } from "sonner";
 
 type Page = "dashboard" | "editor" | "members" | "training";
 
@@ -33,20 +43,93 @@ export default function Layout({
   const { clear, identity } = useInternetIdentity();
   const { data: profile } = useCallerProfile();
   const { data: isAdmin } = useIsAdmin();
+  const { data: logoSrc } = useLogo();
+  const setLogo = useSetLogo();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const principal = identity?.getPrincipal().toString() ?? "";
   const shortPrincipal = principal ? `${principal.slice(0, 8)}...` : "";
 
+  const handleLogoClick = () => {
+    if (isAdmin) {
+      fileInputRef.current?.click();
+    }
+  };
+
+  const handleLogoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const dataUrl = ev.target?.result as string;
+      try {
+        await setLogo.mutateAsync(dataUrl);
+        toast.success("Logo updated!");
+      } catch {
+        toast.error("Failed to update logo");
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* Header */}
-      <header className="border-b border-border/50 bg-card/80 backdrop-blur-sm sticky top-0 z-50">
+      <header className="border-b border-border bg-card sticky top-0 z-50">
         <div className="flex items-center justify-between px-6 h-14">
           {/* Logo */}
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-md bg-primary/20 border border-primary/40 flex items-center justify-center">
-              <Code2 className="w-4 h-4 text-primary" />
-            </div>
+            {isAdmin ? (
+              <button
+                type="button"
+                className="relative group w-8 h-8 rounded-md border border-primary flex items-center justify-center overflow-hidden cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary"
+                onClick={handleLogoClick}
+                title="Click to change logo"
+                aria-label="Change logo"
+                data-ocid="logo.button"
+              >
+                {logoSrc ? (
+                  <img
+                    src={logoSrc}
+                    alt="Xution logo"
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <Code2 className="w-4 h-4 text-primary" />
+                )}
+                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                  {setLogo.isPending ? (
+                    <Loader2 className="w-3 h-3 text-primary animate-spin" />
+                  ) : (
+                    <Camera className="w-3 h-3 text-primary" />
+                  )}
+                </div>
+              </button>
+            ) : (
+              <div className="w-8 h-8 rounded-md border border-primary flex items-center justify-center overflow-hidden">
+                {logoSrc ? (
+                  <img
+                    src={logoSrc}
+                    alt="Xution logo"
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <Code2 className="w-4 h-4 text-primary" />
+                )}
+              </div>
+            )}
+            {/* Hidden file input for logo upload */}
+            {isAdmin && (
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleLogoFileChange}
+                data-ocid="logo.upload_button"
+              />
+            )}
             <span className="font-display font-bold text-lg gold-gradient">
               Xution Code Studio
             </span>
@@ -70,22 +153,8 @@ export default function Layout({
                   : "text-muted-foreground hover:text-foreground"
               }
             >
-              <LayoutDashboard className="w-4 h-4 mr-1" />
-              Dashboard
-            </Button>
-            <Button
-              variant={currentPage === "editor" ? "secondary" : "ghost"}
-              size="sm"
-              onClick={() => onNavigate("editor")}
-              data-ocid="nav.editor_link"
-              className={
-                currentPage === "editor"
-                  ? "text-primary"
-                  : "text-muted-foreground hover:text-foreground"
-              }
-            >
-              <Code2 className="w-4 h-4 mr-1" />
-              Editor
+              <Home className="w-4 h-4 mr-1" />
+              Projects
             </Button>
             {isAdmin && (
               <>
@@ -124,7 +193,12 @@ export default function Layout({
           {/* User menu */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-2"
+                data-ocid="nav.user_menu_button"
+              >
                 <div className="w-6 h-6 rounded-full bg-primary/30 border border-primary/50 flex items-center justify-center text-primary text-xs font-bold">
                   {profile?.username?.[0]?.toUpperCase() ?? "?"}
                 </div>
@@ -134,29 +208,36 @@ export default function Layout({
                 <ChevronDown className="w-3 h-3 text-muted-foreground" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuContent align="end" className="w-52">
               <DropdownMenuItem
                 disabled
                 className="text-xs text-muted-foreground"
               >
                 {shortPrincipal}
               </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => onNavigate("dashboard")}
+                data-ocid="nav.back_to_projects_link"
+              >
+                <Home className="w-4 h-4 mr-2" /> Back to Projects
+              </DropdownMenuItem>
               {isAdmin && (
                 <>
                   <DropdownMenuItem
                     onClick={() => onNavigate("members")}
-                    data-ocid="nav.members_link"
+                    data-ocid="nav.members_dropdown_link"
                   >
-                    <Users className="w-4 h-4 mr-2" /> Members
+                    <Users className="w-4 h-4 mr-2" /> Member Management
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     onClick={() => onNavigate("training")}
-                    data-ocid="nav.training_link"
+                    data-ocid="nav.training_dropdown_link"
                   >
                     <Brain className="w-4 h-4 mr-2" /> AI Training
                   </DropdownMenuItem>
                 </>
               )}
+              <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={clear}
                 className="text-destructive focus:text-destructive"

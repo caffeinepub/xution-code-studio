@@ -58,6 +58,7 @@ actor {
   let aiPreferenceRules = Map.empty<Nat, Text>();
 
   var isSeeded : Bool = false;
+  var logoData : Text = "";
 
   module Project {
     public func compare(project1 : Project, project2 : Project) : Order.Order {
@@ -86,16 +87,25 @@ actor {
     };
   };
 
+  // Logo management (Class 6 only to set, public to get)
+  public shared ({ caller }) func setLogo(data : Text) : async () {
+    onlyClass6(caller);
+    logoData := data;
+  };
+
+  public query func getLogo() : async Text {
+    logoData;
+  };
+
   public shared ({ caller }) func seedDefaultClass6Users() : async () {
-    // Only allow seeding once and only by an admin
     if (isSeeded) {
       Runtime.trap("Default users already seeded");
     };
     
     onlyClass6(caller);
 
-    let class6User1Principal = Principal.fromText("aaaaa-aa"); // Placeholder - in real app would be actual principals
-    let class6User2Principal = Principal.fromText("aaaaa-aa"); // Placeholder - in real app would be actual principals
+    let class6User1Principal = Principal.fromText("aaaaa-aa");
+    let class6User2Principal = Principal.fromText("aaaaa-aa");
 
     let class6User1 : User = {
       id = class6User1Principal;
@@ -116,7 +126,6 @@ actor {
     isSeeded := true;
   };
 
-  // User Management Functions (Class 6 only)
   public shared ({ caller }) func addMember(userId : Principal, username : Text) : async () {
     onlyClass6(caller);
     
@@ -154,7 +163,6 @@ actor {
     users.remove(userId);
   };
 
-  // Profile functions required by frontend
   public query ({ caller }) func getCallerUserProfile() : async ?User {
     users.get(caller);
   };
@@ -175,7 +183,6 @@ actor {
         users.add(caller, updatedUser);
       };
       case (null) {
-        // Create new user profile
         let newUser : User = {
           id = caller;
           username;
@@ -195,7 +202,6 @@ actor {
   };
 
   public query ({ caller }) func getUser() : async User {
-    // Users can read their own profile, Class 6 can read any profile
     switch (users.get(caller)) {
       case (?user) { user };
       case (null) { Runtime.trap("User not found") };
@@ -203,7 +209,6 @@ actor {
   };
 
   public shared ({ caller }) func updateUsername(newUsername : Text) : async () {
-    // Members can update their own username
     if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
       Runtime.trap("Unauthorized: Only members can update username");
     };
@@ -228,8 +233,6 @@ actor {
     files : [ProjectFile],
     isGlobal : Bool,
   ) : async Text {
-    // Class 6 can create any project (including global)
-    // Members can only create personal projects (not global)
     let isClass6 = AccessControl.isAdmin(accessControlState, caller);
     let isMember = AccessControl.hasPermission(accessControlState, caller, #user);
     
@@ -268,7 +271,6 @@ actor {
       case (?existingProject) {
         onlyOwnerOrClass6(caller, existingProject.ownerId);
         
-        // Members cannot set isGlobal to true on their own projects
         let isClass6 = AccessControl.isAdmin(accessControlState, caller);
         if (isGlobal and not isClass6) {
           Runtime.trap("Unauthorized: Only Class 6 can mark projects as global");
@@ -305,7 +307,6 @@ actor {
   public shared ({ caller }) func addVersion(projectId : Text, prompt : Text, files : [ProjectFile]) : async () {
     switch (projects.get(projectId)) {
       case (?project) {
-        // Only owner or Class 6 can add versions
         onlyOwnerOrClass6(caller, project.ownerId);
         
         let versionId = prompt.concat(Time.now().toText());
@@ -331,7 +332,6 @@ actor {
   public query ({ caller }) func getProjectVersions(projectId : Text) : async [Version] {
     switch (projects.get(projectId)) {
       case (?project) {
-        // Can only view versions if can view the project
         if (not (project.isGlobal or caller == project.ownerId or AccessControl.isAdmin(accessControlState, caller))) {
           Runtime.trap("Unauthorized: Cannot view versions for this project");
         };
@@ -382,7 +382,6 @@ actor {
   };
 
   public query ({ caller }) func getAIPreferenceRules() : async [Text] {
-    // All users can read AI preference rules
     let result = Array.tabulate(aiPreferenceRules.size(), func(i : Nat) : Text {
       switch (aiPreferenceRules.get(i)) {
         case (?rule) { rule };
@@ -406,12 +405,10 @@ actor {
   };
 
   public query ({ caller }) func getAllGlobalProjects() : async [Project] {
-    // All users can read global projects
     projects.values().toArray().filter(func(p) { p.isGlobal }).sort();
   };
 
   public query ({ caller }) func getCallerProjects() : async [Project] {
-    // Users can read their own projects
     projects.values().toArray().filter(func(p) { p.ownerId == caller }).sort();
   };
 };

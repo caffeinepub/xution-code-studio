@@ -52,11 +52,12 @@ export interface backendInterface {
     assignCallerUserRole(user: Principal, role: UserRole): Promise<void>;
     createProject(title: string, language: Language, files: Array<ProjectFile>, isGlobal: boolean): Promise<string>;
     deleteProject(projectId: string): Promise<void>;
-    getAIPreferenceRules(): Promise<Array<string>>;
+    getAIPreferenceRules(): Promise<Array<string>>;  
     getAllGlobalProjects(): Promise<Array<Project>>;
     getCallerProjects(): Promise<Array<Project>>;
     getCallerUserProfile(): Promise<User | null>;
     getCallerUserRole(): Promise<UserRole>;
+    getLogo(): Promise<string>;
     getProject(projectId: string): Promise<Project>;
     getProjectVersions(projectId: string): Promise<Array<Version>>;
     getUser(): Promise<User>;
@@ -67,6 +68,7 @@ export interface backendInterface {
     revertToVersion(projectId: string, versionId: string): Promise<void>;
     saveCallerUserProfile(username: string): Promise<void>;
     seedDefaultClass6Users(): Promise<void>;
+    setLogo(data: string): Promise<void>;
     updateProject(projectId: string, title: string, language: Language, files: Array<ProjectFile>, isGlobal: boolean): Promise<void>;
     updateUserRole(userId: Principal, newRole: UserRole): Promise<void>;
     updateUsername(newUsername: string): Promise<void>;

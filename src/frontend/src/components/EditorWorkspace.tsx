@@ -31,14 +31,17 @@ import { buildPreviewHtml, generateCode } from "@/utils/codeGenerator";
 import {
   ArrowLeft,
   Bot,
+  Check,
   ChevronRight,
   FileCode,
   History,
   Loader2,
   Play,
+  Rocket,
   RotateCcw,
   Send,
   Terminal,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -85,7 +88,7 @@ export default function EditorWorkspace({
   const [proposedFiles, setProposedFiles] = useState<ProjectFile[] | null>(
     null,
   );
-  const [showProposal, setShowProposal] = useState(false);
+  const [showProposalDialog, setShowProposalDialog] = useState(false);
   const [promptHistory, setPromptHistory] = useState<PromptHistoryItem[]>([]);
 
   const [showVersions, setShowVersions] = useState(false);
@@ -137,17 +140,30 @@ export default function EditorWorkspace({
     }
   };
 
+  const handleDeploy = () => {
+    const url = `${window.location.origin}/#/preview/${projectId}`;
+    navigator.clipboard
+      .writeText(url)
+      .then(() => {
+        toast.success(
+          "Preview link copied! Share this URL to let anyone view your project.",
+        );
+      })
+      .catch(() => {
+        toast.success(`Preview URL: ${url}`);
+      });
+  };
+
   const handleAISubmit = () => {
     if (!aiPrompt.trim()) return;
     const generated = generateCode(language, aiPrompt, aiPrefs);
     setProposedFiles(generated);
-    setShowProposal(true);
   };
 
   const handleAcceptProposal = async () => {
     if (!proposedFiles || !project) return;
     setLocalFiles(proposedFiles);
-    setShowProposal(false);
+    setShowProposalDialog(false);
     const p = aiPrompt;
     setPromptHistory((prev) => [
       {
@@ -189,7 +205,7 @@ export default function EditorWorkspace({
       ...prev,
     ]);
     setProposedFiles(null);
-    setShowProposal(false);
+    setShowProposalDialog(false);
     setAiPrompt("");
   };
 
@@ -221,6 +237,8 @@ export default function EditorWorkspace({
     );
   }
 
+  const isApplying = addVersion.isPending || updateProject.isPending;
+
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
@@ -228,14 +246,14 @@ export default function EditorWorkspace({
         {onBackToProjects && (
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
             size="sm"
             onClick={onBackToProjects}
-            className="h-7 text-xs gap-1.5 text-muted-foreground hover:text-foreground flex-shrink-0"
+            className="h-7 text-xs gap-1.5 border-primary text-primary hover:bg-primary hover:text-black flex-shrink-0"
             data-ocid="editor.back_button"
           >
             <ArrowLeft className="w-3 h-3" />
-            Projects
+            Back to Projects
           </Button>
         )}
         <input
@@ -274,6 +292,18 @@ export default function EditorWorkspace({
           </label>
         )}
         <div className="flex-1" />
+        {/* Deploy / Share Preview — visible to all users */}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={handleDeploy}
+          className="h-7 text-xs gap-1 text-primary hover:bg-primary/10"
+          data-ocid="editor.deploy_button"
+        >
+          <Rocket className="w-3 h-3" />
+          Deploy
+        </Button>
         {canPreview && (
           <Button
             type="button"
@@ -373,7 +403,7 @@ export default function EditorWorkspace({
                 ref={iframeRef}
                 srcDoc={previewHtml()}
                 sandbox="allow-scripts"
-                className="w-full h-full bg-white"
+                className="w-full h-full bg-background"
                 title="Live Preview"
               />
             </div>
@@ -381,12 +411,17 @@ export default function EditorWorkspace({
         </div>
 
         {/* AI Panel */}
-        <div className="w-72 border-l border-border/50 bg-card/30 flex flex-col">
+        <div className="w-80 border-l border-border/50 bg-card/30 flex flex-col">
           <div className="px-3 py-2 border-b border-border/50 flex items-center gap-2">
             <Bot className="w-4 h-4 text-primary" />
             <span className="text-xs font-semibold text-foreground">
               AI Assistant
             </span>
+            {proposedFiles && (
+              <span className="ml-auto text-xs text-primary font-medium animate-pulse">
+                Review changes ↓
+              </span>
+            )}
           </div>
 
           {aiPrefs.length > 0 && (
@@ -408,32 +443,104 @@ export default function EditorWorkspace({
             </div>
           )}
 
-          <div className="p-3 border-b border-border/30">
-            <Textarea
-              value={aiPrompt}
-              onChange={(e) => setAiPrompt(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey))
-                  handleAISubmit();
-              }}
-              placeholder="Describe what you see on screen and what you want to change..."
-              className="min-h-[80px] text-xs bg-muted/30 border-border focus:border-primary resize-none"
-              data-ocid="editor.ai_input"
-            />
-            <Button
-              type="button"
-              className="w-full mt-2 h-8 text-xs bg-primary text-primary-foreground hover:bg-primary/90 gap-1"
-              onClick={handleAISubmit}
-              disabled={!aiPrompt.trim()}
-              data-ocid="editor.ai_submit_button"
+          {/* Prompt input — shown when no proposal pending */}
+          {!proposedFiles && (
+            <div className="p-3 border-b border-border/30">
+              <Textarea
+                value={aiPrompt}
+                onChange={(e) => setAiPrompt(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey))
+                    handleAISubmit();
+                }}
+                placeholder="Describe what you want to change visually — e.g. 'add a red button at the top', 'make the title bigger', 'change the background to dark'..."
+                className="min-h-[90px] text-xs bg-muted/30 border-border focus:border-primary resize-none"
+                data-ocid="editor.ai_input"
+              />
+              <Button
+                type="button"
+                className="w-full mt-2 h-8 text-xs bg-primary text-primary-foreground hover:bg-primary/90 gap-1"
+                onClick={handleAISubmit}
+                disabled={!aiPrompt.trim()}
+                data-ocid="editor.ai_submit_button"
+              >
+                <Send className="w-3 h-3" />
+                Generate Code
+              </Button>
+              <p className="text-xs text-muted-foreground mt-1 text-center opacity-60">
+                Describe what you see and want changed — no code knowledge
+                needed
+              </p>
+            </div>
+          )}
+
+          {/* Inline proposal preview — shown when AI has generated code */}
+          {proposedFiles && (
+            <div
+              className="p-3 border-b border-border/50 flex flex-col gap-2"
+              data-ocid="ai.inline_proposal"
             >
-              <Send className="w-3 h-3" />
-              Generate Code
-            </Button>
-            <p className="text-xs text-muted-foreground mt-1 text-center opacity-60">
-              Tip: Describe visuals, not code terms
-            </p>
-          </div>
+              <div className="flex items-center gap-2 mb-1">
+                <Bot className="w-3.5 h-3.5 text-primary" />
+                <span className="text-xs font-semibold text-primary">
+                  Proposed Changes
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowProposalDialog(true)}
+                  className="ml-auto text-xs text-muted-foreground hover:text-foreground underline"
+                >
+                  Full view
+                </button>
+              </div>
+              <div className="space-y-2">
+                {proposedFiles.map((f) => (
+                  <div key={f.filename}>
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <FileCode className="w-3 h-3 text-primary" />
+                      <span className="text-xs font-mono text-primary">
+                        {f.filename}
+                      </span>
+                    </div>
+                    <pre
+                      className="code-editor text-xs p-2 rounded overflow-y-auto whitespace-pre-wrap"
+                      style={{ maxHeight: "150px" }}
+                    >
+                      {f.content.slice(0, 800)}
+                      {f.content.length > 800 ? "\n...(more)" : ""}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+              {/* Primary Accept & Apply — inline directly below the code */}
+              <Button
+                type="button"
+                className="w-full h-9 text-sm font-semibold bg-primary text-primary-foreground hover:bg-primary/90 gap-2 mt-1"
+                onClick={handleAcceptProposal}
+                disabled={isApplying}
+                data-ocid="ai.inline_accept_button"
+              >
+                {isApplying ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Applying...
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4" /> Accept &amp; Apply
+                  </>
+                )}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full h-7 text-xs border-border gap-1"
+                onClick={handleRejectProposal}
+                data-ocid="ai.inline_reject_button"
+              >
+                <X className="w-3 h-3" /> Reject
+              </Button>
+            </div>
+          )}
 
           <div className="flex-1 overflow-hidden">
             <p className="px-3 py-2 text-xs text-muted-foreground font-semibold uppercase tracking-wider">
@@ -441,7 +548,10 @@ export default function EditorWorkspace({
             </p>
             <ScrollArea className="h-40">
               {promptHistory.length === 0 ? (
-                <p className="px-3 text-xs text-muted-foreground">
+                <p
+                  className="px-3 text-xs text-muted-foreground"
+                  data-ocid="editor.ai_history_empty_state"
+                >
                   No prompts yet
                 </p>
               ) : (
@@ -524,8 +634,8 @@ export default function EditorWorkspace({
         )}
       </div>
 
-      {/* Proposal dialog */}
-      <Dialog open={showProposal} onOpenChange={setShowProposal}>
+      {/* Full Proposal dialog */}
+      <Dialog open={showProposalDialog} onOpenChange={setShowProposalDialog}>
         <DialogContent
           className="max-w-2xl max-h-[80vh] flex flex-col"
           data-ocid="ai.confirm_dialog"
@@ -555,23 +665,23 @@ export default function EditorWorkspace({
               </div>
             ))}
           </ScrollArea>
-          <div className="flex justify-end mt-3">
-            <Button
-              type="button"
-              onClick={handleAcceptProposal}
-              disabled={addVersion.isPending || updateProject.isPending}
-              className="bg-primary text-primary-foreground hover:bg-primary/90 gap-2"
-              data-ocid="ai.inline_accept_button"
-            >
-              {addVersion.isPending ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" /> Applying...
-                </>
-              ) : (
-                "Accept & Apply"
-              )}
-            </Button>
-          </div>
+          <Button
+            type="button"
+            onClick={handleAcceptProposal}
+            disabled={isApplying}
+            className="bg-primary text-primary-foreground hover:bg-primary/90 gap-2 w-full mt-2"
+            data-ocid="ai.dialog_accept_button"
+          >
+            {isApplying ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" /> Applying...
+              </>
+            ) : (
+              <>
+                <Check className="w-4 h-4" /> Accept &amp; Apply
+              </>
+            )}
+          </Button>
           <Separator />
           <DialogFooter className="gap-2">
             <Button
@@ -582,21 +692,6 @@ export default function EditorWorkspace({
               data-ocid="ai.cancel_button"
             >
               Reject
-            </Button>
-            <Button
-              type="button"
-              onClick={handleAcceptProposal}
-              disabled={addVersion.isPending || updateProject.isPending}
-              className="bg-primary text-primary-foreground hover:bg-primary/90"
-              data-ocid="ai.accept_button"
-            >
-              {addVersion.isPending ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Applying...
-                </>
-              ) : (
-                "Accept & Apply"
-              )}
             </Button>
           </DialogFooter>
         </DialogContent>

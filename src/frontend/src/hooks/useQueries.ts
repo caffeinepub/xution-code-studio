@@ -283,4 +283,32 @@ export function useSeedDefaultUsers() {
   });
 }
 
+// Cast actor to any for getLogo/setLogo since these methods exist on the
+// backend but aren't yet reflected in the auto-generated binding types.
+export function useLogo() {
+  const { actor, isFetching } = useActor();
+  return useQuery({
+    queryKey: ["logo"],
+    queryFn: async () => {
+      if (!actor) return "";
+      return (actor as any).getLogo() as Promise<string>;
+    },
+    enabled: !!actor && !isFetching,
+  });
+}
+
+export function useSetLogo() {
+  const { actor } = useActor();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (data: string) => {
+      if (!actor) throw new Error("Not connected");
+      await (actor as any).setLogo(data);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["logo"] });
+    },
+  });
+}
+
 export { Language, UserRole };

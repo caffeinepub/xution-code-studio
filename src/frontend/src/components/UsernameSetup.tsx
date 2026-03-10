@@ -15,8 +15,12 @@ export default function UsernameSetup() {
     if (!username.trim()) return;
     saveProfile.mutate(username.trim(), {
       onSuccess: () =>
-        toast.success("Profile created! Welcome to AI Code Studio."),
-      onError: () => toast.error("Failed to save profile. Please try again."),
+        toast.success("Profile created! Welcome to Xution Code Studio."),
+      onError: (err) => {
+        const message =
+          err instanceof Error ? err.message : "Failed to save profile.";
+        toast.error(`Save failed: ${message}`);
+      },
     });
   };
 
@@ -46,9 +50,22 @@ export default function UsernameSetup() {
                 placeholder="Enter your username..."
                 className="bg-muted/50 border-border focus:border-primary"
                 autoFocus
+                disabled={saveProfile.isPending}
                 data-ocid="username.input"
               />
             </div>
+
+            {saveProfile.isError && (
+              <p
+                className="text-sm text-destructive"
+                data-ocid="username.error_state"
+              >
+                {saveProfile.error instanceof Error
+                  ? saveProfile.error.message
+                  : "Failed to save profile. Please try again."}
+              </p>
+            )}
+
             <Button
               type="submit"
               className="w-full bg-primary text-primary-foreground hover:bg-primary/90 font-semibold"
@@ -57,8 +74,8 @@ export default function UsernameSetup() {
             >
               {saveProfile.isPending ? (
                 <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Creating
-                  profile...
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Creating profile...
                 </>
               ) : (
                 "Continue →"
