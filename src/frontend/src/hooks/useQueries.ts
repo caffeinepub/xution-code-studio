@@ -13,6 +13,8 @@ export function useCallerProfile() {
       return actor.getCallerUserProfile();
     },
     enabled: !!actor && !isFetching,
+    retry: 1,
+    retryDelay: 1000,
   });
 }
 

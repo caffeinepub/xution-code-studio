@@ -58,6 +58,7 @@ function MainApp() {
     data: profile,
     isLoading: profileLoading,
     isFetching: profileFetching,
+    isError: profileError,
   } = useCallerProfile();
   const { data: isAdmin } = useIsAdmin();
   const seedUsers = useSeedDefaultUsers();
@@ -90,6 +91,7 @@ function MainApp() {
     setPage(targetPage);
   };
 
+  // Show loading only during initial auth check
   if (isInitializing) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -103,6 +105,7 @@ function MainApp() {
     );
   }
 
+  // Show login page immediately without waiting for actor
   if (!isLoggedIn) {
     return (
       <>
@@ -112,7 +115,8 @@ function MainApp() {
     );
   }
 
-  if (actorFetching) {
+  // After login: show connecting screen while actor loads
+  if (actorFetching && !actor) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="flex flex-col items-center gap-3">
@@ -125,6 +129,7 @@ function MainApp() {
     );
   }
 
+  // Actor failed after all retries
   if (actorError && !actor) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -150,7 +155,8 @@ function MainApp() {
     );
   }
 
-  if (profileLoading || (!profile && profileFetching)) {
+  // Show profile loading spinner only while actively fetching and no error yet
+  if (profileLoading || (!profile && profileFetching && !profileError)) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="flex flex-col items-center gap-3">
@@ -161,6 +167,7 @@ function MainApp() {
     );
   }
 
+  // No profile found (new user, error, or null response) → prompt setup
   if (!profile) {
     return (
       <>
