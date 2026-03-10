@@ -190,63 +190,93 @@ export default function Layout({
             )}
           </nav>
 
-          {/* User menu */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="gap-2"
-                data-ocid="nav.user_menu_button"
-              >
-                <div className="w-6 h-6 rounded-full bg-primary/30 border border-primary/50 flex items-center justify-center text-primary text-xs font-bold">
-                  {profile?.username?.[0]?.toUpperCase() ?? "?"}
-                </div>
-                <span className="hidden md:inline text-sm">
-                  {profile?.username ?? shortPrincipal}
-                </span>
-                <ChevronDown className="w-3 h-3 text-muted-foreground" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-52">
-              <DropdownMenuItem
-                disabled
-                className="text-xs text-muted-foreground"
-              >
-                {shortPrincipal}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => onNavigate("dashboard")}
-                data-ocid="nav.back_to_projects_link"
-              >
-                <Home className="w-4 h-4 mr-2" /> Back to Projects
-              </DropdownMenuItem>
-              {isAdmin && (
-                <>
-                  <DropdownMenuItem
-                    onClick={() => onNavigate("members")}
-                    data-ocid="nav.members_dropdown_link"
-                  >
-                    <Users className="w-4 h-4 mr-2" /> Member Management
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => onNavigate("training")}
-                    data-ocid="nav.training_dropdown_link"
-                  >
-                    <Brain className="w-4 h-4 mr-2" /> AI Training
-                  </DropdownMenuItem>
-                </>
-              )}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onClick={clear}
-                className="text-destructive focus:text-destructive"
-                data-ocid="auth.logout_button"
-              >
-                <LogOut className="w-4 h-4 mr-2" /> Sign Out
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {/* Right side: admin quick-access buttons + user menu */}
+          <div className="flex items-center gap-2">
+            {isAdmin && (
+              <div className="hidden md:flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onNavigate("members")}
+                  className="gap-1.5 border-primary text-primary hover:bg-primary/10 text-xs h-8"
+                  data-ocid="nav.members_header_button"
+                >
+                  <Users className="w-3.5 h-3.5" />
+                  Member Management
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onNavigate("training")}
+                  className="gap-1.5 border-primary text-primary hover:bg-primary/10 text-xs h-8"
+                  data-ocid="nav.training_header_button"
+                >
+                  <Brain className="w-3.5 h-3.5" />
+                  AI Training
+                </Button>
+              </div>
+            )}
+
+            {/* User menu */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="gap-2"
+                  data-ocid="nav.user_menu_button"
+                >
+                  <div className="w-6 h-6 rounded-full bg-primary/30 border border-primary/50 flex items-center justify-center text-primary text-xs font-bold">
+                    {profile?.username?.[0]?.toUpperCase() ?? "?"}
+                  </div>
+                  <span className="hidden md:inline text-sm">
+                    {profile?.username ?? shortPrincipal}
+                  </span>
+                  <ChevronDown className="w-3 h-3 text-muted-foreground" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-52">
+                <DropdownMenuItem
+                  disabled
+                  className="text-xs text-muted-foreground"
+                >
+                  {shortPrincipal}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => onNavigate("dashboard")}
+                  data-ocid="nav.back_to_projects_link"
+                >
+                  <Home className="w-4 h-4 mr-2" /> Back to Projects
+                </DropdownMenuItem>
+                {isAdmin && (
+                  <>
+                    <DropdownMenuItem
+                      onClick={() => onNavigate("members")}
+                      data-ocid="nav.members_dropdown_link"
+                    >
+                      <Users className="w-4 h-4 mr-2" /> Member Management
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => onNavigate("training")}
+                      data-ocid="nav.training_dropdown_link"
+                    >
+                      <Brain className="w-4 h-4 mr-2" /> AI Training
+                    </DropdownMenuItem>
+                  </>
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={clear}
+                  className="text-destructive focus:text-destructive"
+                  data-ocid="auth.logout_button"
+                >
+                  <LogOut className="w-4 h-4 mr-2" /> Sign Out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
       </header>
 

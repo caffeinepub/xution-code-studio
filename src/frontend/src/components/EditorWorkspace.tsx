@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
@@ -33,6 +34,7 @@ import {
   Bot,
   Check,
   ChevronRight,
+  Copy,
   FileCode,
   History,
   Loader2,
@@ -93,6 +95,7 @@ export default function EditorWorkspace({
 
   const [showVersions, setShowVersions] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const [showDeployModal, setShowDeployModal] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   useEffect(() => {
@@ -141,16 +144,18 @@ export default function EditorWorkspace({
   };
 
   const handleDeploy = () => {
+    setShowDeployModal(true);
+  };
+
+  const handleCopyDeployUrl = () => {
     const url = `${window.location.origin}/#/preview/${projectId}`;
     navigator.clipboard
       .writeText(url)
       .then(() => {
-        toast.success(
-          "Preview link copied! Share this URL to let anyone view your project.",
-        );
+        toast.success("Link copied!");
       })
       .catch(() => {
-        toast.success(`Preview URL: ${url}`);
+        toast.error("Failed to copy link");
       });
   };
 
@@ -238,6 +243,7 @@ export default function EditorWorkspace({
   }
 
   const isApplying = addVersion.isPending || updateProject.isPending;
+  const deployUrl = `${window.location.origin}/#/preview/${projectId}`;
 
   return (
     <div className="flex flex-col h-full">
@@ -692,6 +698,69 @@ export default function EditorWorkspace({
               data-ocid="ai.cancel_button"
             >
               Reject
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Deploy Preview Modal */}
+      <Dialog open={showDeployModal} onOpenChange={setShowDeployModal}>
+        <DialogContent
+          className="max-w-2xl flex flex-col gap-4"
+          data-ocid="editor.deploy_modal"
+        >
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Rocket className="w-5 h-5 text-primary" />
+              Deploy Preview
+            </DialogTitle>
+          </DialogHeader>
+
+          {/* iframe preview for HTML projects */}
+          {canPreview && (
+            <div
+              className="w-full rounded-md border border-border overflow-hidden"
+              style={{ height: "400px" }}
+            >
+              <iframe
+                srcDoc={previewHtml()}
+                sandbox="allow-scripts"
+                className="w-full h-full bg-white"
+                title="Deploy Preview"
+              />
+            </div>
+          )}
+
+          {/* Deploy URL row */}
+          <div className="flex items-center gap-2">
+            <Input
+              readOnly
+              value={deployUrl}
+              className="flex-1 text-xs font-mono bg-muted/30 border-border"
+              data-ocid="editor.deploy_url_input"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleCopyDeployUrl}
+              className="gap-1.5 border-primary text-primary hover:bg-primary/10 flex-shrink-0"
+              data-ocid="editor.copy_url_button"
+            >
+              <Copy className="w-3.5 h-3.5" />
+              Copy Link
+            </Button>
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setShowDeployModal(false)}
+              className="border-border"
+              data-ocid="editor.deploy_modal_close_button"
+            >
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

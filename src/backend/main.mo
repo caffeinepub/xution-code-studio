@@ -75,12 +75,6 @@ actor {
     };
   };
 
-  func onlyMember(caller : Principal) {
-    if (AccessControl.getUserRole(accessControlState, caller) != #user) {
-      Runtime.trap("Unauthorized: Only members can perform this action");
-    };
-  };
-
   func onlyOwnerOrClass6(caller : Principal, ownerId : Principal) {
     if (not (AccessControl.isAdmin(accessControlState, caller) or caller == ownerId)) {
       Runtime.trap("Unauthorized: Only project owner or Class 6 can perform this action");
@@ -98,11 +92,9 @@ actor {
   };
 
   public shared ({ caller }) func seedDefaultClass6Users() : async () {
-    if (isSeeded) {
-      Runtime.trap("Default users already seeded");
-    };
-    
-    onlyClass6(caller);
+    // Silently skip if already seeded or caller is not admin
+    if (isSeeded) { return };
+    if (not AccessControl.isAdmin(accessControlState, caller)) { return };
 
     let class6User1Principal = Principal.fromText("aaaaa-aa");
     let class6User2Principal = Principal.fromText("aaaaa-aa");
@@ -168,9 +160,13 @@ actor {
   };
 
   public shared ({ caller }) func saveCallerUserProfile(username : Text) : async () {
-    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
-      Runtime.trap("Unauthorized: Only users can save profiles");
+    // Any authenticated (non-anonymous) caller can save their profile.
+    if (caller.isAnonymous()) {
+      Runtime.trap("Anonymous users cannot save profiles");
     };
+    
+    let role = AccessControl.getUserRole(accessControlState, caller);
+    let resolvedRole : AccessControl.UserRole = if (role == #guest) { #user } else { role };
     
     switch (users.get(caller)) {
       case (?user) {
@@ -186,7 +182,7 @@ actor {
         let newUser : User = {
           id = caller;
           username;
-          role = #user;
+          role = resolvedRole;
           createdAt = Time.now();
         };
         users.add(caller, newUser);
@@ -209,8 +205,8 @@ actor {
   };
 
   public shared ({ caller }) func updateUsername(newUsername : Text) : async () {
-    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
-      Runtime.trap("Unauthorized: Only members can update username");
+    if (caller.isAnonymous()) {
+      Runtime.trap("Anonymous users cannot update username");
     };
     
     switch (users.get(caller)) {
@@ -225,6 +221,13 @@ actor {
       };
       case (null) { Runtime.trap("User not found") };
     };
+  };
+
+  public query ({ caller }) func getAllUsers() : async [User] {
+    if (not AccessControl.isAdmin(accessControlState, caller)) {
+      Runtime.trap("Unauthorized: Only Class 6 can view all users");
+    };
+    users.values().toArray();
   };
 
   public shared ({ caller }) func createProject(
