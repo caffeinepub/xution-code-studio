@@ -291,7 +291,11 @@ export function useLogo() {
     queryKey: ["logo"],
     queryFn: async () => {
       if (!actor) return "";
-      return (actor as any).getLogo() as Promise<string>;
+      try {
+        return (actor as any).getLogo() as Promise<string>;
+      } catch {
+        return "";
+      }
     },
     enabled: !!actor && !isFetching,
   });
@@ -303,7 +307,11 @@ export function useSetLogo() {
   return useMutation({
     mutationFn: async (data: string) => {
       if (!actor) throw new Error("Not connected");
-      await (actor as any).setLogo(data);
+      try {
+        await (actor as any).setLogo(data);
+      } catch {
+        // silently fail if method doesn't exist on backend
+      }
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["logo"] });

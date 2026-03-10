@@ -1,5 +1,6 @@
 import Layout from "@/components/Layout";
 import UsernameSetup from "@/components/UsernameSetup";
+import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import { useActor } from "@/hooks/useActor";
 import { useInternetIdentity } from "@/hooks/useInternetIdentity";
@@ -14,7 +15,7 @@ import LoginPage from "@/pages/LoginPage";
 import MembersPage from "@/pages/MembersPage";
 import PreviewPage from "@/pages/PreviewPage";
 import TrainingPage from "@/pages/TrainingPage";
-import { Loader2 } from "lucide-react";
+import { Loader2, RefreshCw, WifiOff } from "lucide-react";
 import { useEffect, useState } from "react";
 
 type Page = "dashboard" | "editor" | "members" | "training";
@@ -46,7 +47,12 @@ export default function App() {
 function MainApp() {
   const { identity, isInitializing } = useInternetIdentity();
   const isLoggedIn = !!identity;
-  const { actor, isFetching: actorFetching } = useActor();
+  const {
+    actor,
+    isFetching: actorFetching,
+    isError: actorError,
+    refetch: retryActor,
+  } = useActor();
 
   const {
     data: profile,
@@ -63,7 +69,7 @@ function MainApp() {
   useEffect(() => {
     if (isLoggedIn && !seeded && actor && !actorFetching) {
       setSeeded(true);
-      seedUsers.mutate();
+      seedUsers.mutate(undefined, { onError: () => {} });
     }
   }, [isLoggedIn, seeded, actor, actorFetching, seedUsers]);
 
@@ -103,6 +109,44 @@ function MainApp() {
         <LoginPage />
         <Toaster />
       </>
+    );
+  }
+
+  if (actorFetching) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="w-6 h-6 text-primary animate-spin" />
+          <p className="text-sm text-muted-foreground">
+            Connecting to backend...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (actorError && !actor) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <WifiOff className="w-10 h-10 text-primary" />
+          <p className="text-primary font-semibold text-lg">
+            Connection failed
+          </p>
+          <p className="text-sm text-muted-foreground text-center max-w-xs">
+            Could not reach the backend. Please check your connection and try
+            again.
+          </p>
+          <Button
+            data-ocid="backend.retry_button"
+            onClick={() => retryActor()}
+            className="flex items-center gap-2"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Retry
+          </Button>
+        </div>
+      </div>
     );
   }
 
