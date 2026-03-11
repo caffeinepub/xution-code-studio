@@ -4,17 +4,35 @@ import type { Principal } from "@icp-sdk/core/principal";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useActor } from "./useActor";
 
+/** Returns true when an error is IC0508 (canister stopped). */
+export function isCanisterStopped(err: unknown): boolean {
+  const msg = String(err);
+  return msg.includes("IC0508") || msg.includes("is stopped");
+}
+
+// Wraps a promise with a hard timeout so profile loading never hangs forever
+function withTimeout<T>(promise: Promise<T>, ms = 8000): Promise<T | null> {
+  return Promise.race([
+    promise,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), ms)),
+  ]);
+}
+
 export function useCallerProfile() {
   const { actor, isFetching } = useActor();
   return useQuery({
     queryKey: ["callerProfile"],
     queryFn: async () => {
       if (!actor) return null;
-      return actor.getCallerUserProfile();
+      try {
+        return await withTimeout(actor.getCallerUserProfile(), 8000);
+      } catch (err) {
+        if (isCanisterStopped(err)) throw err; // surface stopped errors
+        return null;
+      }
     },
     enabled: !!actor && !isFetching,
-    retry: 1,
-    retryDelay: 1000,
+    retry: false,
   });
 }
 

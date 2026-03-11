@@ -1,6 +1,13 @@
-// QR code utilities using browser-native APIs only (no external packages)
-// QR data format: JSON { principal: string, username: string, secret: string }
+// QR code utilities
+// QR data format: JSON { principal: string, username: string, xutNumber?: string, secret: string }
 // Store per-user QR secret in localStorage: xution_qr_{principalText} = secret
+
+export interface QRPayload {
+  principal: string;
+  username: string;
+  xutNumber?: string;
+  secret: string;
+}
 
 export function getOrCreateQRSecret(principalText: string): string {
   const key = `xution_qr_${principalText}`;
@@ -13,111 +20,39 @@ export function getOrCreateQRSecret(principalText: string): string {
 }
 
 /**
- * Generate a simple QR-code-like data URL using canvas.
- * This creates a visual representation of the data encoded as a grid pattern.
- * For a real deployment, replace with a proper QR library.
+ * Generate a QR code image URL using an external API (no npm package needed).
  */
 export async function generateQRDataURL(
   principalText: string,
   username: string,
+  xutNumber?: string,
 ): Promise<string> {
   const secret = getOrCreateQRSecret(principalText);
-  const data = JSON.stringify({ principal: principalText, username, secret });
-
-  // Encode data as a simple visual pattern using canvas
-  const canvas = document.createElement("canvas");
-  const size = 256;
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return "";
-
-  // Background
-  ctx.fillStyle = "#FFD700";
-  ctx.fillRect(0, 0, size, size);
-
-  // Create a deterministic grid pattern from data hash
-  const bytes = new TextEncoder().encode(data);
-  const gridSize = 21; // standard QR-like grid
-  const cellSize = Math.floor((size - 16) / gridSize);
-  const offset = 8;
-
-  ctx.fillStyle = "#000000";
-
-  // Draw finder patterns (corners)
-  const drawFinder = (x: number, y: number) => {
-    ctx.fillRect(x, y, cellSize * 7, cellSize * 7);
-    ctx.fillStyle = "#FFD700";
-    ctx.fillRect(x + cellSize, y + cellSize, cellSize * 5, cellSize * 5);
-    ctx.fillStyle = "#000000";
-    ctx.fillRect(
-      x + cellSize * 2,
-      y + cellSize * 2,
-      cellSize * 3,
-      cellSize * 3,
-    );
-  };
-  drawFinder(offset, offset);
-  drawFinder(offset + (gridSize - 7) * cellSize, offset);
-  drawFinder(offset, offset + (gridSize - 7) * cellSize);
-
-  // Fill data cells from bytes
-  let byteIdx = 0;
-  let bitIdx = 0;
-  for (let row = 0; row < gridSize; row++) {
-    for (let col = 0; col < gridSize; col++) {
-      // Skip finder pattern areas
-      if (
-        (row < 8 && col < 8) ||
-        (row < 8 && col >= gridSize - 8) ||
-        (row >= gridSize - 8 && col < 8)
-      ) {
-        continue;
-      }
-      if (byteIdx < bytes.length) {
-        const bit = (bytes[byteIdx] >> (7 - bitIdx)) & 1;
-        if (bit) {
-          ctx.fillStyle = "#000000";
-          ctx.fillRect(
-            offset + col * cellSize,
-            offset + row * cellSize,
-            cellSize - 1,
-            cellSize - 1,
-          );
-        }
-        bitIdx++;
-        if (bitIdx === 8) {
-          bitIdx = 0;
-          byteIdx++;
-        }
-      }
-    }
-  }
-
-  // Embed the data as text in the canvas metadata area (for later reading)
-  // We store the actual data in a hidden area of the image via alpha channel trick
-  // For import/export, we'll encode the JSON into the image filename or store separately
-
-  return canvas.toDataURL("image/png");
+  const payload: QRPayload = { principal: principalText, username, secret };
+  if (xutNumber) payload.xutNumber = xutNumber;
+  const data = JSON.stringify(payload);
+  const encoded = encodeURIComponent(data);
+  return `https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=${encoded}&color=000000&bgcolor=FFD700`;
 }
 
 /**
  * Store QR payload for a user so it can be verified on login.
- * The payload is stored in localStorage keyed by principal.
  */
 export function storeQRPayload(
   principalText: string,
-  payload: { principal: string; username: string; secret: string },
+  payload: QRPayload,
 ): void {
   localStorage.setItem(
     `xution_qr_payload_${principalText}`,
     JSON.stringify(payload),
   );
+  localStorage.setItem(`xution_qr_${principalText}`, payload.secret);
+  if (payload.xutNumber) {
+    localStorage.setItem(`xution_xut_${principalText}`, payload.xutNumber);
+  }
 }
 
-export function getQRPayload(
-  principalText: string,
-): { principal: string; username: string; secret: string } | null {
+export function getQRPayload(principalText: string): QRPayload | null {
   const raw = localStorage.getItem(`xution_qr_payload_${principalText}`);
   if (!raw) return null;
   try {
@@ -130,9 +65,14 @@ export function getQRPayload(
 /**
  * Export QR data as a JSON file download.
  */
-export function exportQRData(principalText: string, username: string): void {
+export function exportQRData(
+  principalText: string,
+  username: string,
+  xutNumber?: string,
+): void {
   const secret = getOrCreateQRSecret(principalText);
-  const payload = { principal: principalText, username, secret };
+  const payload: QRPayload = { principal: principalText, username, secret };
+  if (xutNumber) payload.xutNumber = xutNumber;
   const blob = new Blob([JSON.stringify(payload, null, 2)], {
     type: "application/json",
   });
@@ -146,20 +86,16 @@ export function exportQRData(principalText: string, username: string): void {
 
 /**
  * Import QR data from a JSON file.
- * Returns the parsed payload if valid, null otherwise.
  */
-export async function importQRData(
-  file: File,
-): Promise<{ principal: string; username: string; secret: string } | null> {
+export async function importQRData(file: File): Promise<QRPayload | null> {
   return new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
         const payload = JSON.parse(e.target?.result as string);
         if (payload?.principal && payload?.username && payload?.secret) {
-          // Store in localStorage for future login
           storeQRPayload(payload.principal, payload);
-          resolve(payload);
+          resolve(payload as QRPayload);
         } else {
           resolve(null);
         }
@@ -173,27 +109,57 @@ export async function importQRData(
 }
 
 /**
- * Parse QR data from an image file.
- * Since we can't decode an actual QR code without jsqr, we look for
- * an associated JSON payload in localStorage or prompt for JSON import.
+ * Parse QR payload from a file.
+ * Supports JSON exports. Image QR scanning requires uploading the exported JSON.
  */
-export async function parseQRFromFile(
-  file: File,
-): Promise<{ principal: string; username: string; secret: string } | null> {
-  // Try to read as JSON first (exported QR data files)
+export async function parseQRFromFile(file: File): Promise<QRPayload | null> {
+  // Support JSON exports (primary flow)
   if (file.type === "application/json" || file.name.endsWith(".json")) {
     return importQRData(file);
   }
-  // For image files, we can't decode without jsqr
-  // Return null and let the UI handle it
-  return null;
+  // For image files, try to read as text in case it's misnamed JSON
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text = e.target?.result as string;
+        const payload = JSON.parse(text);
+        if (payload?.principal && payload?.username && payload?.secret) {
+          storeQRPayload(payload.principal, payload);
+          resolve(payload as QRPayload);
+          return;
+        }
+      } catch {
+        // not JSON
+      }
+      // Cannot decode QR image without jsqr — resolve null
+      resolve(null);
+    };
+    reader.onerror = () => resolve(null);
+    reader.readAsText(file);
+  });
 }
 
 /**
  * Verify a QR login attempt.
- * Checks that the provided secret matches the stored secret for the principal.
  */
 export function verifyQRSecret(principalText: string, secret: string): boolean {
   const stored = localStorage.getItem(`xution_qr_${principalText}`);
   return stored === secret;
+}
+
+export function verifyXUTNumber(
+  principalText: string,
+  xutNumber: string,
+): boolean {
+  const stored = localStorage.getItem(`xution_xut_${principalText}`);
+  return stored === xutNumber;
+}
+
+export function storeXUTForUsername(username: string, xutNumber: string): void {
+  localStorage.setItem(`xution_xut_user_${username}`, xutNumber);
+}
+
+export function getXUTForUsername(username: string): string | null {
+  return localStorage.getItem(`xution_xut_user_${username}`);
 }
