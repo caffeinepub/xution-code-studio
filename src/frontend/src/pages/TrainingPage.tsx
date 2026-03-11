@@ -3,7 +3,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
+import { useActor } from "@/hooks/useActor";
 import {
+  isCanisterStopped,
   useAIPreferenceRules,
   useAddAIPreference,
   useRemoveAIPreference,
@@ -16,6 +18,7 @@ import {
   pickRandom,
 } from "@/utils/aiEngine";
 import {
+  AlertTriangle,
   BookOpen,
   Brain,
   Plus,
@@ -53,6 +56,39 @@ const GREETING: Message = {
   learnedRule: null,
   timestamp: Date.now(),
 };
+
+// ─── Backend Status Banner ────────────────────────────────────────────────────
+
+function BackendOfflineBanner({ onDismiss }: { onDismiss: () => void }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -8 }}
+      transition={{ duration: 0.2 }}
+      className="mx-4 mt-3 flex items-start gap-3 rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-4 py-3"
+      data-ocid="training.error_state"
+    >
+      <AlertTriangle className="w-4 h-4 text-yellow-400 flex-shrink-0 mt-0.5" />
+      <p className="flex-1 text-xs text-yellow-400 leading-relaxed">
+        <span className="font-semibold">
+          Backend temporarily offline (IC0508).
+        </span>{" "}
+        Your conversation is still active, but saves won't persist until the
+        service restarts.
+      </p>
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="text-yellow-400/50 hover:text-yellow-400 transition-colors flex-shrink-0"
+        aria-label="Dismiss"
+        data-ocid="training.close_button"
+      >
+        <X className="w-3.5 h-3.5" />
+      </button>
+    </motion.div>
+  );
+}
 
 // ─── Teach Term Panel ─────────────────────────────────────────────────────────
 
@@ -111,6 +147,7 @@ function TeachTermPanel({
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function TrainingPage() {
+  const { actor } = useActor();
   const { data: rules = [], isLoading: rulesLoading } = useAIPreferenceRules();
   const addRule = useAddAIPreference();
   const removeRule = useRemoveAIPreference();
@@ -123,6 +160,7 @@ export default function TrainingPage() {
   const [sessionRestored, setSessionRestored] = useState(false);
   const [customTerms, setCustomTerms] = useState<CustomTerm[]>([]);
   const [knowledge, setKnowledge] = useState<KnowledgeChunk[]>([]);
+  const [backendDown, setBackendDown] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -131,6 +169,12 @@ export default function TrainingPage() {
     if (scrollRef.current)
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, []);
+
+  // Show banner if actor is unavailable
+  useEffect(() => {
+    if (!actor) setBackendDown(true);
+    else setBackendDown(false);
+  }, [actor]);
 
   useEffect(() => {
     if (rulesLoading || sessionRestored) return;
@@ -179,8 +223,13 @@ export default function TrainingPage() {
       }));
       await addRule.mutateAsync(SESSION_PREFIX + JSON.stringify(stripped));
       toast.success("Training session saved");
-    } catch {
-      toast.error("Failed to save — check backend connection");
+    } catch (err) {
+      if (isCanisterStopped(err)) {
+        setBackendDown(true);
+        toast.error("Backend offline (IC0508) — session not saved");
+      } else {
+        toast.error("Failed to save — check backend connection");
+      }
     } finally {
       setIsSaving(false);
     }
@@ -203,8 +252,13 @@ export default function TrainingPage() {
       try {
         await addRule.mutateAsync(CUSTOM_TERM_PREFIX + JSON.stringify(newTerm));
         toast.success(`Taught: "${word}" = ${meaning}`);
-      } catch {
-        toast.error("Failed to save term to backend");
+      } catch (err) {
+        if (isCanisterStopped(err)) {
+          setBackendDown(true);
+          toast.error("Backend offline — term saved locally only");
+        } else {
+          toast.error("Failed to save term to backend");
+        }
       }
       const aiMsg: Message = {
         id: `a-${Date.now()}`,
@@ -253,8 +307,8 @@ export default function TrainingPage() {
       ]);
       try {
         await addRule.mutateAsync(CUSTOM_TERM_PREFIX + JSON.stringify(newTerm));
-      } catch {
-        /* silent */
+      } catch (err) {
+        if (isCanisterStopped(err)) setBackendDown(true);
       }
     }
     if (newKnowledge) {
@@ -263,8 +317,8 @@ export default function TrainingPage() {
         await addRule.mutateAsync(
           KNOWLEDGE_PREFIX + JSON.stringify(newKnowledge),
         );
-      } catch {
-        /* silent */
+      } catch (err) {
+        if (isCanisterStopped(err)) setBackendDown(true);
       }
     }
 
@@ -282,8 +336,8 @@ export default function TrainingPage() {
     if (learnedRule && !newTerm) {
       try {
         await addRule.mutateAsync(learnedRule);
-      } catch {
-        /* silent */
+      } catch (err) {
+        if (isCanisterStopped(err)) setBackendDown(true);
       }
     }
   }, [
@@ -356,7 +410,10 @@ export default function TrainingPage() {
               variant="ghost"
               size="sm"
               onClick={handleSaveSession}
-              disabled={isSaving || messages.length <= 1}
+              disabled={isSaving || messages.length <= 1 || backendDown}
+              title={
+                backendDown ? "Backend offline — saves unavailable" : undefined
+              }
               className="text-yellow-400/70 hover:text-yellow-400 hover:bg-yellow-500/10 text-xs h-7 px-2 gap-1 border border-yellow-500/20 disabled:opacity-30"
               data-ocid="training.save_button"
             >
@@ -374,6 +431,13 @@ export default function TrainingPage() {
             </Button>
           </div>
         </div>
+
+        {/* Backend offline banner */}
+        <AnimatePresence>
+          {backendDown && (
+            <BackendOfflineBanner onDismiss={() => setBackendDown(false)} />
+          )}
+        </AnimatePresence>
 
         <div
           ref={scrollRef}

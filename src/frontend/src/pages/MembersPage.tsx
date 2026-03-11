@@ -4,12 +4,21 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import {
+  isCanisterStopped,
   useAddMember,
   useGetMembers,
   useRemoveMember,
 } from "@/hooks/useQueries";
-import jsQR from "jsqr";
-import { ImageIcon, Loader2, UserMinus, UserPlus, Users } from "lucide-react";
+import {
+  AlertTriangle,
+  ImageIcon,
+  Loader2,
+  UserMinus,
+  UserPlus,
+  Users,
+  X,
+} from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -22,143 +31,94 @@ function fileToDataURL(file: File): Promise<string> {
   });
 }
 
-/** Apply grayscale+threshold to a canvas in place for better QR detection */
-function applyHighContrast(
-  ctx: CanvasRenderingContext2D,
-  w: number,
-  h: number,
-) {
-  const imageData = ctx.getImageData(0, 0, w, h);
-  const d = imageData.data;
-  for (let i = 0; i < d.length; i += 4) {
-    const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-    const val = gray < 128 ? 0 : 255;
-    d[i] = d[i + 1] = d[i + 2] = val;
-    d[i + 3] = 255;
-  }
-  ctx.putImageData(imageData, 0, 0);
+/** Load Tesseract.js from CDN at runtime (not bundled). */
+function loadTesseractCDN(): Promise<any> {
+  return new Promise((resolve, reject) => {
+    if ((window as any).Tesseract) {
+      resolve((window as any).Tesseract);
+      return;
+    }
+    const script = document.createElement("script");
+    script.src =
+      "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+    script.onload = () => resolve((window as any).Tesseract);
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
 }
 
-function tryDecode(
-  ctx: CanvasRenderingContext2D,
-  w: number,
-  h: number,
-): string | null {
+/**
+ * Use Tesseract OCR to read the XUT number visually printed on the card.
+ * The XUT number is ALWAYS to the right of "ID:" on the card.
+ * We scan each line, find the one containing "ID:", and extract what's after it.
+ */
+async function extractXUTFromCardImage(
+  dataUrl: string,
+): Promise<string | null> {
   try {
-    const imageData = ctx.getImageData(0, 0, w, h);
-    const code = jsQR(imageData.data, imageData.width, imageData.height);
-    return code?.data ?? null;
+    const Tesseract = await loadTesseractCDN();
+    const worker = await Tesseract.createWorker("eng");
+    const {
+      data: { text },
+    } = await worker.recognize(dataUrl);
+    await worker.terminate();
+
+    const lines = text
+      .split("\n")
+      .map((l: string) => l.trim())
+      .filter(Boolean);
+
+    for (const line of lines) {
+      // Only process lines that explicitly contain "ID:" as a label
+      if (!/\bID\s*:/i.test(line)) continue;
+
+      // Extract value immediately to the right of "ID:"
+      // e.g. "ID: 123456", "ID:XUT-9001", "ID : ABC123"
+      const match = line.match(/\bID\s*:\s*([A-Z0-9][A-Z0-9\-]{1,20})/i);
+      if (match) {
+        const candidate = match[1].trim().toUpperCase();
+        // Skip pure-letter words with no digits (likely a misread word)
+        if (/^[A-Z]{3,}$/.test(candidate)) continue;
+        return candidate;
+      }
+    }
+
+    return null;
   } catch {
     return null;
   }
 }
 
-/** Scan full image at various scales, with and without high-contrast filter */
-function scanFullImage(img: HTMLImageElement): string | null {
-  const scales = [1, 2, 1.5, 0.75, 3, 0.5];
-  for (const scale of scales) {
-    for (const highContrast of [false, true]) {
-      const w = Math.round(img.width * scale);
-      const h = Math.round(img.height * scale);
-      if (w < 10 || h < 10) continue;
-      const canvas = document.createElement("canvas");
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) continue;
-      ctx.drawImage(img, 0, 0, w, h);
-      if (highContrast) applyHighContrast(ctx, w, h);
-      const result = tryDecode(ctx, w, h);
-      if (result) return result;
-    }
-  }
-  return null;
-}
+// ─── Backend Offline Banner ───────────────────────────────────────────────────
 
-/** Scan quadrants and thirds of the image to find a QR code embedded in a card */
-function scanRegions(img: HTMLImageElement): string | null {
-  const scale = img.width > 1000 ? 1 : 2;
-  const W = Math.round(img.width * scale);
-  const H = Math.round(img.height * scale);
-
-  const fullCanvas = document.createElement("canvas");
-  fullCanvas.width = W;
-  fullCanvas.height = H;
-  const fullCtx = fullCanvas.getContext("2d");
-  if (!fullCtx) return null;
-  fullCtx.drawImage(img, 0, 0, W, H);
-
-  const hw = Math.floor(W / 2);
-  const hh = Math.floor(H / 2);
-  const regions: [number, number, number, number][] = [
-    [0, 0, hw, hh],
-    [hw, 0, W - hw, hh],
-    [0, hh, hw, H - hh],
-    [hw, hh, W - hw, H - hh],
-    [0, 0, Math.floor(W / 3), H],
-    [Math.floor((W * 2) / 3), 0, Math.ceil(W / 3), H],
-    [0, 0, W, Math.floor(H / 3)],
-    [0, Math.floor((H * 2) / 3), W, Math.ceil(H / 3)],
-  ];
-
-  for (const [sx, sy, sw, sh] of regions) {
-    if (sw < 20 || sh < 20) continue;
-    for (const highContrast of [false, true]) {
-      const crop = document.createElement("canvas");
-      crop.width = sw;
-      crop.height = sh;
-      const cropCtx = crop.getContext("2d");
-      if (!cropCtx) continue;
-      cropCtx.drawImage(fullCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
-      if (highContrast) applyHighContrast(cropCtx, sw, sh);
-      const result = tryDecode(cropCtx, sw, sh);
-      if (result) return result;
-    }
-  }
-  return null;
-}
-
-function parseXUTFromQRData(rawData: string): string | null {
-  try {
-    const payload = JSON.parse(rawData);
-    const xut =
-      payload.xut ??
-      payload.xutNumber ??
-      payload.XUT ??
-      payload.xut_number ??
-      payload.XUTNumber ??
-      payload.xutNum ??
-      null;
-    if (xut) return String(xut);
-  } catch {
-    /* not JSON */
-  }
-  const patternMatch = rawData.match(/XUT[-_]?[A-Z0-9]+/i);
-  if (patternMatch) return patternMatch[0].toUpperCase();
-  const trimmed = rawData.trim();
-  if (/^[A-Z0-9]{4,24}$/i.test(trimmed)) return trimmed.toUpperCase();
-  return null;
-}
-
-function extractXUTFromCardImage(dataUrl: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      const full = scanFullImage(img);
-      if (full) {
-        const xut = parseXUTFromQRData(full);
-        return resolve(xut ?? (full.trim().slice(0, 32) || null));
-      }
-      const regional = scanRegions(img);
-      if (regional) {
-        const xut = parseXUTFromQRData(regional);
-        return resolve(xut ?? (regional.trim().slice(0, 32) || null));
-      }
-      resolve(null);
-    };
-    img.onerror = () => resolve(null);
-    img.src = dataUrl;
-  });
+function BackendOfflineBanner({ onDismiss }: { onDismiss: () => void }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -8 }}
+      transition={{ duration: 0.2 }}
+      className="mb-6 flex items-start gap-3 rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-4 py-3"
+      data-ocid="members.error_state"
+    >
+      <AlertTriangle className="w-4 h-4 text-yellow-400 flex-shrink-0 mt-0.5" />
+      <p className="flex-1 text-xs text-yellow-400 leading-relaxed">
+        <span className="font-semibold">
+          Backend temporarily offline (IC0508).
+        </span>{" "}
+        Member changes can't be saved until the service restarts.
+      </p>
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="text-yellow-400/50 hover:text-yellow-400 transition-colors flex-shrink-0"
+        aria-label="Dismiss"
+        data-ocid="members.close_button"
+      >
+        <X className="w-3.5 h-3.5" />
+      </button>
+    </motion.div>
+  );
 }
 
 export default function MembersPage() {
@@ -171,6 +131,7 @@ export default function MembersPage() {
   const [qrCardData, setQrCardData] = useState<string | null>(null);
   const [qrFileName, setQrFileName] = useState<string | null>(null);
   const [extractingXUT, setExtractingXUT] = useState(false);
+  const [backendDown, setBackendDown] = useState(false);
   const qrFileRef = useRef<HTMLInputElement>(null);
 
   const handleQRFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -181,13 +142,14 @@ export default function MembersPage() {
       setQrCardData(dataUrl);
       setQrFileName(file.name);
       setExtractingXUT(true);
+      toast.info("Reading XUT from card image…");
       const xut = await extractXUTFromCardImage(dataUrl);
       setExtractingXUT(false);
       if (xut) {
         setXutNumber(xut);
         toast.success(`XUT detected: ${xut}`);
       } else {
-        toast.info("No XUT code found in image — enter manually if needed");
+        toast.info("Could not auto-detect XUT — enter manually");
       }
     } catch {
       setExtractingXUT(false);
@@ -212,11 +174,16 @@ export default function MembersPage() {
       setQrCardData(null);
       setQrFileName(null);
     } catch (err) {
-      toast.error(
-        err instanceof Error
-          ? err.message
-          : "Failed to add member — check backend connection",
-      );
+      if (isCanisterStopped(err)) {
+        setBackendDown(true);
+        toast.error("Backend offline (IC0508) — member not saved");
+      } else {
+        toast.error(
+          err instanceof Error
+            ? err.message
+            : "Failed to add member — check backend connection",
+        );
+      }
     }
   };
 
@@ -225,9 +192,14 @@ export default function MembersPage() {
       await removeMember.mutateAsync(uname);
       toast.success(`Member "${uname}" removed`);
     } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Failed to remove member",
-      );
+      if (isCanisterStopped(err)) {
+        setBackendDown(true);
+        toast.error("Backend offline (IC0508) — could not remove member");
+      } else {
+        toast.error(
+          err instanceof Error ? err.message : "Failed to remove member",
+        );
+      }
     }
   };
 
@@ -242,10 +214,17 @@ export default function MembersPage() {
           </Badge>
         </div>
         <p className="text-muted-foreground text-sm">
-          Add members with a username and QR card image. XUT number is
-          auto-detected from the card when possible.
+          Add members with a username and QR card image. The XUT number is read
+          from the "ID:" field printed on the card.
         </p>
       </div>
+
+      {/* Backend offline banner */}
+      <AnimatePresence>
+        {backendDown && (
+          <BackendOfflineBanner onDismiss={() => setBackendDown(false)} />
+        )}
+      </AnimatePresence>
 
       <div className="space-y-6">
         <div className="bg-card border border-border rounded-xl p-6">
@@ -286,11 +265,11 @@ export default function MembersPage() {
                 <div className="text-center">
                   <p className="text-sm font-medium text-foreground">
                     {extractingXUT
-                      ? "Scanning for XUT code…"
+                      ? "Reading XUT from card…"
                       : (qrFileName ?? "Upload QR Card Image")}
                   </p>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    PNG, JPG — XUT auto-detected from embedded QR
+                    PNG, JPG — XUT read from the "ID:" field on the card
                   </p>
                 </div>
                 <Button
@@ -320,7 +299,7 @@ export default function MembersPage() {
               <Label className="text-xs">
                 XUT Number{" "}
                 <span className="text-muted-foreground font-normal">
-                  (auto-detected from card, or enter manually)
+                  (auto-filled from "ID:" on card, or enter manually)
                 </span>
               </Label>
               <div className="relative">
@@ -328,7 +307,9 @@ export default function MembersPage() {
                   value={xutNumber}
                   onChange={(e) => setXutNumber(e.target.value)}
                   placeholder="XUT-0001"
-                  className={`text-xs font-mono tracking-widest w-48 ${xutNumber ? "border-primary/50 text-primary" : ""}`}
+                  className={`text-xs font-mono tracking-widest w-48 ${
+                    xutNumber ? "border-primary/50 text-primary" : ""
+                  }`}
                   data-ocid="members.xut_input"
                 />
                 {extractingXUT && (

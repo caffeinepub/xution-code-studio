@@ -197,7 +197,11 @@ export default function EditorWorkspace({
     if (!project) return;
     if (localMode) {
       localMode.onSave({ title, language, files: localFiles, isGlobal });
-      toast.success("Project saved!");
+      const _saveUrl = `${window.location.origin}/#/preview/${projectId}`;
+      toast.success("Project saved!", {
+        description: _saveUrl,
+        duration: 6000,
+      });
       return;
     }
     try {
@@ -208,7 +212,11 @@ export default function EditorWorkspace({
         files: localFiles,
         isGlobal,
       });
-      toast.success("Project saved!");
+      const _saveUrl = `${window.location.origin}/#/preview/${projectId}`;
+      toast.success("Project saved!", {
+        description: _saveUrl,
+        duration: 6000,
+      });
     } catch {
       toast.error("Failed to save project");
     }
@@ -284,7 +292,11 @@ export default function EditorWorkspace({
     if (localMode) {
       localMode.onAddVersion(p, proposedFiles);
       localMode.onSave({ files: proposedFiles, title, language, isGlobal });
-      toast.success("Changes applied and saved!");
+      const _applyUrl = `${window.location.origin}/#/preview/${projectId}`;
+      toast.success("Changes applied and saved!", {
+        description: _applyUrl,
+        duration: 6000,
+      });
       setProposedFiles(null);
       return;
     }
@@ -299,7 +311,11 @@ export default function EditorWorkspace({
           isGlobal,
         }),
       ]);
-      toast.success("Changes applied and saved!");
+      const _applyUrl = `${window.location.origin}/#/preview/${projectId}`;
+      toast.success("Changes applied and saved!", {
+        description: _applyUrl,
+        duration: 6000,
+      });
     } catch {
       toast.error("Failed to save to backend");
     }

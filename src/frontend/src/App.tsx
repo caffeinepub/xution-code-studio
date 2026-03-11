@@ -1,10 +1,8 @@
 import Layout from "@/components/Layout";
-import UsernameSetup from "@/components/UsernameSetup";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import { useActor } from "@/hooks/useActor";
 import { useInternetIdentity } from "@/hooks/useInternetIdentity";
-import { useLocalProjects } from "@/hooks/useLocalProjects";
 import {
   isCanisterStopped,
   useCallerProfile,
@@ -19,7 +17,13 @@ import MembersPage from "@/pages/MembersPage";
 import PreviewPage from "@/pages/PreviewPage";
 import TrainingPage from "@/pages/TrainingPage";
 import { useQueryClient } from "@tanstack/react-query";
-import { Loader2, LogOut, RefreshCw, ServerCrash, WifiOff } from "lucide-react";
+import {
+  AlertTriangle,
+  Loader2,
+  LogOut,
+  RefreshCw,
+  ServerCrash,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 const CLASS6_USERNAMES = new Set(["Unity", "Syndelious"]);
@@ -48,122 +52,45 @@ export default function App() {
   return <MainApp />;
 }
 
-// ─── Local-mode app (no backend canister required) ────────────────────────────
-function LocalModeApp({
+// Session is stored ONLY in React state — no localStorage, no cookies.
+// Lost on page refresh, but updates are real-time via backend canister.
+function MainApp() {
+  const [session, setSession] = useState<string | null>(null);
+
+  if (!session) {
+    return (
+      <>
+        <LoginPage onLogin={(username) => setSession(username)} />
+        <Toaster />
+      </>
+    );
+  }
+
+  return <BackendApp username={session} onSignOut={() => setSession(null)} />;
+}
+
+function BackendApp({
   username,
   onSignOut,
 }: {
   username: string;
   onSignOut: () => void;
 }) {
-  const {
-    projects,
-    versions,
-    createProject,
-    updateProject,
-    deleteProject,
-    addVersion,
-    revertVersion,
-  } = useLocalProjects();
-  const isAdmin = CLASS6_USERNAMES.has(username);
-  const [page, setPage] = useState<Page>("dashboard");
-  const [openProjectIds, setOpenProjectIds] = useState<string[]>([]);
-
-  const handleNavigate = (targetPage: Page) => {
-    if ((targetPage === "members" || targetPage === "training") && !isAdmin)
-      return;
-    setPage(targetPage);
-  };
-
-  return (
-    <>
-      <Layout
-        currentPage={page}
-        onNavigate={handleNavigate}
-        localOverrides={{ username, isAdmin, onSignOut }}
-      >
-        {page === "dashboard" && (
-          <DashboardPage
-            onOpenProject={(id) => {
-              setOpenProjectIds((prev) =>
-                prev.includes(id) ? prev : [...prev, id],
-              );
-              setPage("editor");
-            }}
-            onNavigate={handleNavigate}
-            localMode={{
-              projects,
-              isAdmin,
-              onCreate: createProject,
-              onDelete: deleteProject,
-            }}
-          />
-        )}
-        {page === "editor" && (
-          <EditorPage
-            openProjectIds={openProjectIds}
-            onAddProject={() => setPage("dashboard")}
-            onCloseProject={(id) =>
-              setOpenProjectIds((prev) => prev.filter((p) => p !== id))
-            }
-            onBackToProjects={() => setPage("dashboard")}
-            localMode={{
-              projects,
-              versions,
-              isAdmin,
-              onSave: updateProject,
-              onAddVersion: addVersion,
-              onRevert: revertVersion,
-            }}
-          />
-        )}
-        {page === "members" && isAdmin && <MembersPage />}
-        {page === "training" && isAdmin && <TrainingPage />}
-      </Layout>
-      <Toaster />
-    </>
-  );
-}
-
-// ─── Main app (with backend) ──────────────────────────────────────────────────
-function MainApp() {
-  // Check for local session first — bypasses canister entirely
-  const [localUser, setLocalUser] = useState<string | null>(() =>
-    localStorage.getItem("xution_local_session"),
-  );
-
-  if (localUser) {
-    return (
-      <LocalModeApp
-        username={localUser}
-        onSignOut={() => {
-          localStorage.removeItem("xution_local_session");
-          localStorage.removeItem("xution_is_class6");
-          localStorage.removeItem("xution_class6_pending");
-          setLocalUser(null);
-        }}
-      />
-    );
-  }
-
-  return <BackendApp onLocalLogin={setLocalUser} />;
-}
-
-// ─── Backend-connected app (Internet Identity + canister) ─────────────────────
-function BackendApp({ onLocalLogin }: { onLocalLogin: (u: string) => void }) {
-  const { identity, isInitializing, clear } = useInternetIdentity();
-  const isLoggedIn = !!identity;
+  const { isInitializing } = useInternetIdentity();
   const { actor, isFetching: actorFetching } = useActor();
   const queryClient = useQueryClient();
 
-  const [actorError, setActorError] = useState(false);
+  // Class 6 status is determined purely from username — no backend check needed.
+  const isClass6 = CLASS6_USERNAMES.has(username);
+
+  const [actorTimedOut, setActorTimedOut] = useState(false);
   useEffect(() => {
-    if (!actorFetching && !actor && isLoggedIn) {
-      const t = setTimeout(() => setActorError(true), 500);
+    if (!actorFetching && !actor) {
+      const t = setTimeout(() => setActorTimedOut(true), 5000);
       return () => clearTimeout(t);
     }
-    if (actor) setActorError(false);
-  }, [actorFetching, actor, isLoggedIn]);
+    if (actor) setActorTimedOut(false);
+  }, [actorFetching, actor]);
 
   const {
     data: profile,
@@ -171,77 +98,71 @@ function BackendApp({ onLocalLogin }: { onLocalLogin: (u: string) => void }) {
     isFetching: profileFetching,
     isError: profileError,
     error: profileErrorObj,
-    isSuccess: profileSuccess,
     refetch: refetchProfile,
   } = useCallerProfile();
-  const { data: isAdmin, refetch: refetchIsAdmin } = useIsAdmin();
+
+  const { data: isAdminFromCanister, refetch: refetchIsAdmin } = useIsAdmin();
+  const isAdmin = isClass6 || !!isAdminFromCanister;
+
   const seedUsers = useSeedDefaultUsers();
   const saveProfile = useSaveProfile();
 
   const [page, setPage] = useState<Page>("dashboard");
   const [openProjectIds, setOpenProjectIds] = useState<string[]>([]);
-  const [seeded, setSeeded] = useState(false);
   const bootstrapDoneRef = useRef(false);
+  const seededRef = useRef(false);
 
+  // IC0508 banner state — shown at top but never blocks UI
+  const [showOfflineBanner, setShowOfflineBanner] = useState(false);
+
+  // Seed default users once backend is available
   useEffect(() => {
-    if (isLoggedIn && !seeded && actor && !actorFetching) {
-      setSeeded(true);
+    if (!seededRef.current && actor && !actorFetching) {
+      seededRef.current = true;
       seedUsers.mutate(undefined, { onError: () => {} });
     }
-  }, [isLoggedIn, seeded, actor, actorFetching, seedUsers]);
+  }, [actor, actorFetching, seedUsers]);
 
+  // Save profile to backend when connected
   useEffect(() => {
-    if (!isLoggedIn || !actor || actorFetching || bootstrapDoneRef.current)
-      return;
+    if (!actor || actorFetching || bootstrapDoneRef.current) return;
     if (profileLoading || profileFetching) return;
 
-    const pendingUsername = localStorage.getItem("xution_class6_pending");
-
-    if (profile && CLASS6_USERNAMES.has(profile.username)) {
-      localStorage.setItem("xution_is_class6", "true");
-      localStorage.removeItem("xution_class6_pending");
+    if (profile) {
       bootstrapDoneRef.current = true;
       refetchIsAdmin();
       return;
     }
 
-    if (pendingUsername && !profile) {
-      bootstrapDoneRef.current = true;
-      saveProfile.mutate(pendingUsername, {
-        onSuccess: () => {
-          localStorage.setItem("xution_is_class6", "true");
-          localStorage.removeItem("xution_class6_pending");
-          refetchProfile();
-          refetchIsAdmin();
-        },
-        onError: (err) => {
-          if (!isCanisterStopped(err)) {
-            localStorage.setItem("xution_is_class6", "true");
-          }
-          localStorage.removeItem("xution_class6_pending");
-          queryClient.invalidateQueries({ queryKey: ["isAdmin"] });
-        },
-      });
-    }
+    bootstrapDoneRef.current = true;
+    saveProfile.mutate(username, {
+      onSuccess: () => {
+        refetchProfile();
+        refetchIsAdmin();
+      },
+      onError: (err) => {
+        if (isCanisterStopped(err)) setShowOfflineBanner(true);
+        refetchIsAdmin();
+      },
+    });
   }, [
-    isLoggedIn,
     actor,
     actorFetching,
     profile,
     profileLoading,
     profileFetching,
+    username,
     saveProfile,
     refetchProfile,
     refetchIsAdmin,
-    queryClient,
   ]);
 
-  const handleSignOut = () => {
-    localStorage.removeItem("xution_is_class6");
-    localStorage.removeItem("xution_class6_pending");
-    queryClient.clear();
-    clear();
-  };
+  // Show banner if profile errors with IC0508
+  useEffect(() => {
+    if (profileError && isCanisterStopped(profileErrorObj)) {
+      setShowOfflineBanner(true);
+    }
+  }, [profileError, profileErrorObj]);
 
   const handleOpenProject = (projectId: string) => {
     setOpenProjectIds((prev) =>
@@ -263,168 +184,30 @@ function BackendApp({ onLocalLogin }: { onLocalLogin: (u: string) => void }) {
   if (isInitializing) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <Loader2 className="w-8 h-8 text-primary animate-spin" />
-          <p className="text-sm text-muted-foreground">
-            Loading Xution Code Studio...
-          </p>
-        </div>
+        <Loader2 className="w-6 h-6 text-primary animate-spin" />
       </div>
     );
   }
 
-  if (!isLoggedIn) {
-    return (
-      <>
-        <LoginPage onLocalLogin={onLocalLogin} />
-        <Toaster />
-      </>
-    );
-  }
+  // Class 6 users skip all blocking loading screens — they go straight to the app.
+  // Non-Class 6 users see a brief spinner while actor connects, then proceed.
+  // We NEVER block the UI for backend errors — only show banners.
+  const isConnecting = !isClass6 && actorFetching && !actor && !actorTimedOut;
 
-  if (actorFetching && !actor) {
+  if (isConnecting) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
           <Loader2 className="w-6 h-6 text-primary animate-spin" />
           <p className="text-sm text-muted-foreground">
-            Connecting to backend...
+            Connecting to backend…
           </p>
           <Button
             variant="ghost"
             size="sm"
-            onClick={handleSignOut}
-            className="text-muted-foreground hover:text-foreground gap-2"
+            onClick={onSignOut}
+            className="text-muted-foreground hover:text-foreground gap-2 text-xs"
             data-ocid="backend.signout_button"
-          >
-            <LogOut className="w-3.5 h-3.5" /> Sign Out
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  if (actorError && !actor) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <WifiOff className="w-10 h-10 text-primary" />
-          <p className="text-primary font-semibold text-lg">
-            Connection failed
-          </p>
-          <p className="text-sm text-muted-foreground text-center max-w-xs">
-            Could not reach the backend. Please check your connection and try
-            again.
-          </p>
-          <div className="flex gap-3">
-            <Button
-              data-ocid="backend.retry_button"
-              onClick={() => {
-                setActorError(false);
-                queryClient.resetQueries({ queryKey: ["actor"] });
-              }}
-              className="flex items-center gap-2"
-            >
-              <RefreshCw className="w-4 h-4" /> Retry
-            </Button>
-            <Button
-              variant="outline"
-              onClick={handleSignOut}
-              className="flex items-center gap-2"
-              data-ocid="backend.signout_button"
-            >
-              <LogOut className="w-4 h-4" /> Sign Out
-            </Button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (profileError && isCanisterStopped(profileErrorObj)) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4 text-center max-w-sm">
-          <ServerCrash className="w-10 h-10 text-primary" />
-          <p className="text-primary font-semibold text-lg">
-            Service temporarily offline
-          </p>
-          <p className="text-sm text-muted-foreground">
-            The backend canister is restarting. This usually takes less than a
-            minute.
-          </p>
-          <div className="flex gap-3">
-            <Button
-              data-ocid="profile.retry_button"
-              onClick={() => {
-                queryClient.resetQueries({ queryKey: ["callerProfile"] });
-                refetchProfile();
-              }}
-              className="flex items-center gap-2"
-            >
-              <RefreshCw className="w-4 h-4" /> Try again
-            </Button>
-            <Button
-              variant="outline"
-              onClick={handleSignOut}
-              className="flex items-center gap-2"
-              data-ocid="profile.signout_button"
-            >
-              <LogOut className="w-4 h-4" /> Sign Out
-            </Button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const profileStillLoading =
-    profileLoading || (profileFetching && !profileSuccess && !profileError);
-
-  if (profileStillLoading) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 className="w-6 h-6 text-primary animate-spin" />
-          <p className="text-sm text-muted-foreground">Loading profile...</p>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleSignOut}
-            className="text-muted-foreground hover:text-foreground gap-2"
-            data-ocid="profile.signout_button"
-          >
-            <LogOut className="w-3.5 h-3.5" /> Sign Out
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  const pendingClass6 = localStorage.getItem("xution_class6_pending");
-  if (!profile && !pendingClass6) {
-    return (
-      <>
-        <UsernameSetup />
-        <Toaster />
-      </>
-    );
-  }
-
-  if (!profile && pendingClass6) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 className="w-6 h-6 text-primary animate-spin" />
-          <p className="text-sm text-muted-foreground">
-            Setting up your Class 6 account...
-          </p>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleSignOut}
-            className="text-muted-foreground hover:text-foreground gap-2"
-            data-ocid="setup.signout_button"
           >
             <LogOut className="w-3.5 h-3.5" /> Sign Out
           </Button>
@@ -435,24 +218,94 @@ function BackendApp({ onLocalLogin }: { onLocalLogin: (u: string) => void }) {
 
   return (
     <>
-      <Layout currentPage={page} onNavigate={handleNavigate}>
-        {page === "dashboard" && (
-          <DashboardPage
-            onOpenProject={handleOpenProject}
-            onNavigate={(p) => handleNavigate(p)}
-          />
-        )}
-        {page === "editor" && (
-          <EditorPage
-            openProjectIds={openProjectIds}
-            onAddProject={() => setPage("dashboard")}
-            onCloseProject={handleCloseProject}
-            onBackToProjects={() => setPage("dashboard")}
-          />
-        )}
-        {page === "members" && isAdmin && <MembersPage />}
-        {page === "training" && isAdmin && <TrainingPage />}
-      </Layout>
+      {/* IC0508 / backend offline banner — floats at top, never blocks */}
+      {showOfflineBanner && (
+        <div
+          className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between gap-3 px-4 py-2 bg-yellow-500/10 border-b border-yellow-500/30"
+          data-ocid="app.error_state"
+        >
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-3.5 h-3.5 text-yellow-400 flex-shrink-0" />
+            <p className="text-xs text-yellow-400">
+              <span className="font-semibold">
+                Service temporarily offline.
+              </span>{" "}
+              Backend is restarting. Your session continues — saves will retry
+              when it comes back.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-yellow-400 hover:text-yellow-300 h-6 text-xs px-2"
+              onClick={() => {
+                setShowOfflineBanner(false);
+                queryClient.resetQueries({ queryKey: ["callerProfile"] });
+                refetchProfile();
+              }}
+              data-ocid="app.retry_button"
+            >
+              <RefreshCw className="w-3 h-3 mr-1" /> Retry
+            </Button>
+            <button
+              type="button"
+              onClick={() => setShowOfflineBanner(false)}
+              className="text-yellow-400/50 hover:text-yellow-400 text-xs"
+              aria-label="Dismiss"
+              data-ocid="app.close_button"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className={showOfflineBanner ? "pt-9" : ""}>
+        <Layout
+          currentPage={page}
+          onNavigate={handleNavigate}
+          localOverrides={{ username, isAdmin, onSignOut }}
+        >
+          {page === "dashboard" && (
+            <DashboardPage
+              onOpenProject={handleOpenProject}
+              onNavigate={(p) => handleNavigate(p as Page)}
+            />
+          )}
+          {page === "editor" && (
+            <EditorPage
+              openProjectIds={openProjectIds}
+              onAddProject={() => setPage("dashboard")}
+              onCloseProject={handleCloseProject}
+              onBackToProjects={() => setPage("dashboard")}
+            />
+          )}
+          {page === "members" && isAdmin && <MembersPage />}
+          {page === "training" && isAdmin && <TrainingPage />}
+        </Layout>
+      </div>
+
+      {/* Show ServerCrash indicator for non-class6 if actor fails completely after timeout */}
+      {actorTimedOut && !actor && !isClass6 && (
+        <div className="fixed bottom-4 right-4 z-50 flex items-center gap-2 bg-black border border-yellow-500/30 rounded-xl px-3 py-2">
+          <ServerCrash className="w-4 h-4 text-yellow-400/70" />
+          <p className="text-xs text-yellow-400/70">Backend unreachable</p>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setActorTimedOut(false);
+              queryClient.resetQueries({ queryKey: ["actor"] });
+            }}
+            className="text-yellow-400/70 hover:text-yellow-400 h-6 text-xs px-2"
+            data-ocid="app.retry_button"
+          >
+            <RefreshCw className="w-3 h-3" />
+          </Button>
+        </div>
+      )}
+
       <Toaster />
     </>
   );

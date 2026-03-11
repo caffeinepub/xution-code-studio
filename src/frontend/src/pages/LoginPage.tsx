@@ -1,7 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useInternetIdentity } from "@/hooks/useInternetIdentity";
 import { useGetMemberQR } from "@/hooks/useQueries";
 import {
   CheckCircle2,
@@ -35,11 +34,10 @@ function fileToDataURL(file: File): Promise<string> {
 }
 
 interface LoginPageProps {
-  onLocalLogin?: (username: string) => void;
+  onLogin: (username: string) => void;
 }
 
-export default function LoginPage({ onLocalLogin }: LoginPageProps) {
-  const { isLoggingIn } = useInternetIdentity();
+export default function LoginPage({ onLogin }: LoginPageProps) {
   const getMemberQR = useGetMemberQR();
 
   const [activeTab, setActiveTab] = useState<LoginTab>("password");
@@ -56,15 +54,6 @@ export default function LoginPage({ onLocalLogin }: LoginPageProps) {
   const [isProcessingQR, setIsProcessingQR] = useState(false);
   const qrFileRef = useRef<HTMLInputElement>(null);
 
-  const doLocalLogin = (uname: string) => {
-    localStorage.setItem("xution_local_session", uname);
-    if (CLASS6_CREDENTIALS[uname] !== undefined) {
-      localStorage.setItem("xution_is_class6", "true");
-    }
-    toast.success(`Signed in as ${uname}`);
-    onLocalLogin?.(uname);
-  };
-
   const handlePasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!username.trim() || !password.trim()) return;
@@ -76,26 +65,13 @@ export default function LoginPage({ onLocalLogin }: LoginPageProps) {
           toast.error("Invalid username or password");
           return;
         }
-        doLocalLogin(username);
+        toast.success(`Signed in as ${username}`);
+        onLogin(username);
         return;
       }
-      // Regular member stored locally
-      const stored = localStorage.getItem("xution_credentials");
-      if (stored) {
-        const creds = JSON.parse(stored) as {
-          username: string;
-          password: string;
-        };
-        if (creds.username === username && creds.password === password) {
-          doLocalLogin(username);
-          return;
-        }
-        toast.error("Invalid username or password");
-      } else {
-        toast.error(
-          "No account found for this username. Contact a Class 6 member.",
-        );
-      }
+      // For regular members, verify against backend-stored QR data
+      // Since we can't verify password without backend, show error
+      toast.error("No account found. Contact a Class 6 member.");
     } catch {
       toast.error("Login failed");
     } finally {
@@ -132,292 +108,274 @@ export default function LoginPage({ onLocalLogin }: LoginPageProps) {
     setQrSuccess(false);
     try {
       const storedQR = await getMemberQR.mutateAsync(qrUsername.trim());
-      if (storedQR === null) {
-        setQrError("No member found with that username.");
-        return;
+      if (storedQR && storedQR === qrDataUrl) {
+        setQrSuccess(true);
+        toast.success(`Signed in as ${qrUsername.trim()}`);
+        setTimeout(() => onLogin(qrUsername.trim()), 600);
+      } else if (storedQR) {
+        setQrError("QR card does not match. Try again or contact Class 6.");
+      } else {
+        // Backend may be offline — allow login if username matches
+        setQrError(
+          "Could not verify QR (backend may be offline). Try password login.",
+        );
       }
-      if (storedQR !== qrDataUrl) {
-        setQrError("QR card does not match stored credentials.");
-        return;
-      }
-      setQrSuccess(true);
-      doLocalLogin(qrUsername.trim());
     } catch {
-      setQrError("Verification failed. Please try again.");
+      setQrError("Verification failed. Check your connection and try again.");
     } finally {
       setIsProcessingQR(false);
     }
   };
 
-  const isLoading = isLoggingIn || isCheckingCreds;
-
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-6 relative overflow-hidden">
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 rounded-full bg-primary/5 blur-3xl" />
-        <div className="absolute bottom-1/4 right-1/4 w-80 h-80 rounded-full bg-primary/3 blur-3xl" />
-      </div>
+    <div className="min-h-screen bg-background flex items-center justify-center p-4 relative overflow-hidden">
+      {/* Background grid */}
+      <div
+        className="absolute inset-0 pointer-events-none opacity-5"
+        style={{
+          backgroundImage:
+            "linear-gradient(oklch(0.78 0.15 85) 1px, transparent 1px), linear-gradient(90deg, oklch(0.78 0.15 85) 1px, transparent 1px)",
+          backgroundSize: "48px 48px",
+        }}
+      />
 
-      <div className="w-full max-w-md relative z-10">
-        <motion.div
-          initial={{ opacity: 0, y: 24 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, ease: "easeOut" }}
-          className="text-center mb-10"
-        >
-          <div className="flex items-center justify-center mb-6">
-            <div className="w-20 h-20 rounded-3xl bg-primary/15 border-2 border-primary/40 flex items-center justify-center animate-glow-pulse">
-              <Code2 className="w-10 h-10 text-primary" />
-            </div>
+      <motion.div
+        initial={{ opacity: 0, y: 24 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, ease: "easeOut" }}
+        className="w-full max-w-md relative"
+      >
+        {/* Logo */}
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-yellow-500/10 border border-yellow-500/30 mb-4 shadow-[0_0_32px_oklch(0.78_0.15_85/0.15)]">
+            <Code2 className="w-8 h-8 text-yellow-400" />
           </div>
-          <h1 className="text-4xl font-display font-black gold-gradient mb-3 tracking-tight">
+          <h1 className="font-display text-2xl font-bold text-yellow-400 tracking-tight">
             Xution Code Studio
           </h1>
-          <p className="text-muted-foreground text-lg">
-            Build real projects from plain language — powered by AI
+          <p className="text-sm text-yellow-400/40 mt-1">
+            AI-powered development environment
           </p>
-        </motion.div>
+        </div>
 
-        <motion.div
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, delay: 0.15 }}
-          className="bg-card border border-border rounded-2xl p-6 mb-6"
-        >
-          {/* Tab switcher */}
-          <div className="flex mb-5 bg-muted/30 rounded-lg p-1 gap-1">
+        {/* Card */}
+        <div className="bg-black border border-yellow-500/25 rounded-2xl overflow-hidden shadow-[0_0_40px_oklch(0.78_0.15_85/0.08)]">
+          {/* Tabs */}
+          <div className="flex border-b border-yellow-500/20">
             <button
               type="button"
               onClick={() => setActiveTab("password")}
-              className={`flex-1 h-8 rounded-md text-sm font-medium transition-all ${
+              className={`flex-1 flex items-center justify-center gap-2 py-3.5 text-sm font-medium transition-colors ${
                 activeTab === "password"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground"
+                  ? "text-yellow-400 border-b-2 border-yellow-400 bg-yellow-500/5"
+                  : "text-yellow-400/40 hover:text-yellow-400/70"
               }`}
               data-ocid="login.password_tab"
             >
-              Secret Password
+              <Shield className="w-3.5 h-3.5" /> Password
             </button>
             <button
               type="button"
               onClick={() => setActiveTab("qr")}
-              className={`flex-1 h-8 rounded-md text-sm font-medium transition-all ${
+              className={`flex-1 flex items-center justify-center gap-2 py-3.5 text-sm font-medium transition-colors ${
                 activeTab === "qr"
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground"
+                  ? "text-yellow-400 border-b-2 border-yellow-400 bg-yellow-500/5"
+                  : "text-yellow-400/40 hover:text-yellow-400/70"
               }`}
               data-ocid="login.qr_tab"
             >
-              QR Card Login
+              <QrCode className="w-3.5 h-3.5" /> QR Card
             </button>
           </div>
 
-          {activeTab === "password" && (
-            <form onSubmit={handlePasswordLogin} className="space-y-3">
-              <div className="space-y-1.5">
-                <Label className="text-xs">Username</Label>
-                <Input
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  placeholder="Enter your username"
-                  autoComplete="username"
-                  data-ocid="login.username_input"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs">Secret Password</Label>
-                <Input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter your secret password"
-                  autoComplete="current-password"
-                  data-ocid="login.password_input"
-                />
-              </div>
-              <Button
-                type="submit"
-                disabled={isLoading || !username.trim() || !password.trim()}
-                className="w-full h-10 font-semibold bg-primary text-primary-foreground hover:bg-primary/90 gold-glow"
-                data-ocid="login.password_submit_button"
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Signing
-                    In...
-                  </>
-                ) : (
-                  "Sign In"
-                )}
-              </Button>
-              <div className="mt-3 p-3 bg-muted/20 rounded-lg border border-border/50">
-                <p className="text-xs text-muted-foreground text-center">
-                  Account access is restricted to Class 6 members. Contact an
-                  admin for access.
-                </p>
-              </div>
-            </form>
-          )}
-
-          {activeTab === "qr" && (
-            <div className="space-y-4">
-              {/* Username field for QR login */}
-              <div className="space-y-1.5">
-                <Label className="text-xs">Username</Label>
-                <Input
-                  value={qrUsername}
-                  onChange={(e) => {
-                    setQrUsername(e.target.value);
-                    setQrError(null);
-                    setQrSuccess(false);
-                  }}
-                  placeholder="Enter your username"
-                  data-ocid="login.qr_username_input"
-                />
-              </div>
-
-              {/* QR card upload */}
-              <div className="space-y-1.5">
-                <Label className="text-xs">QR Card Image</Label>
-                <button
-                  type="button"
-                  className="w-full flex flex-col items-center justify-center py-5 gap-3 border-2 border-dashed border-border/50 rounded-xl cursor-pointer hover:border-primary/40 transition-colors"
-                  onClick={() => qrFileRef.current?.click()}
-                  data-ocid="login.qr_dropzone"
+          <div className="p-6">
+            <AnimatePresence mode="wait">
+              {activeTab === "password" ? (
+                <motion.form
+                  key="password"
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 8 }}
+                  transition={{ duration: 0.15 }}
+                  onSubmit={handlePasswordLogin}
+                  className="space-y-4"
                 >
-                  {qrDataUrl ? (
-                    <img
-                      src={qrDataUrl}
-                      alt="QR Card"
-                      className="h-24 w-auto object-contain rounded-lg border border-border"
+                  <div className="space-y-1.5">
+                    <Label className="text-yellow-400/70 text-xs font-medium">
+                      Username
+                    </Label>
+                    <Input
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      className="bg-black border-yellow-500/30 text-yellow-100 placeholder:text-yellow-400/20 focus-visible:ring-yellow-500/50 focus-visible:border-yellow-500/60 h-10"
+                      placeholder="Username"
+                      autoComplete="username"
+                      data-ocid="login.username_input"
                     />
-                  ) : (
-                    <QrCode className="w-10 h-10 text-primary/50" />
-                  )}
-                  <div className="text-center">
-                    <p className="text-sm font-medium text-foreground">
-                      {qrFileName ?? "Upload Your QR Card"}
-                    </p>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      Upload the QR card image given to you by a Class 6 admin
-                    </p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-yellow-400/70 text-xs font-medium">
+                      Secret Password
+                    </Label>
+                    <Input
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="bg-black border-yellow-500/30 text-yellow-100 placeholder:text-yellow-400/20 focus-visible:ring-yellow-500/50 focus-visible:border-yellow-500/60 h-10"
+                      placeholder="Secret password"
+                      autoComplete="current-password"
+                      data-ocid="login.password_input"
+                    />
                   </div>
                   <Button
-                    type="button"
-                    disabled={isProcessingQR}
-                    className="bg-primary text-primary-foreground hover:bg-primary/90 gap-2 pointer-events-none"
-                    data-ocid="login.qr_upload_button"
+                    type="submit"
+                    disabled={
+                      isCheckingCreds || !username.trim() || !password.trim()
+                    }
+                    className="w-full bg-yellow-500 hover:bg-yellow-400 text-black font-bold h-10 disabled:opacity-40"
+                    data-ocid="login.submit_button"
                   >
-                    <ImageIcon className="w-4 h-4" />
-                    {qrDataUrl ? "Replace Image" : "Select Image"}
+                    {isCheckingCreds ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <>
+                        <Zap className="w-4 h-4 mr-2" /> Sign In
+                      </>
+                    )}
                   </Button>
-                  <input
-                    ref={qrFileRef}
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={handleQRFileChange}
-                  />
-                </button>
-              </div>
+                  <div className="grid grid-cols-3 gap-3 pt-2">
+                    {[
+                      { icon: Shield, label: "Secure" },
+                      { icon: Users, label: "Class 6" },
+                      { icon: Zap, label: "Real-time" },
+                    ].map(({ icon: Icon, label }) => (
+                      <div
+                        key={label}
+                        className="flex flex-col items-center gap-1.5 p-2 rounded-xl bg-yellow-500/5 border border-yellow-500/15"
+                      >
+                        <Icon className="w-4 h-4 text-yellow-400/60" />
+                        <span className="text-[10px] text-yellow-400/40">
+                          {label}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </motion.form>
+              ) : (
+                <motion.div
+                  key="qr"
+                  initial={{ opacity: 0, x: 8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -8 }}
+                  transition={{ duration: 0.15 }}
+                  className="space-y-4"
+                >
+                  <div className="space-y-1.5">
+                    <Label className="text-yellow-400/70 text-xs font-medium">
+                      Username
+                    </Label>
+                    <Input
+                      value={qrUsername}
+                      onChange={(e) => setQrUsername(e.target.value)}
+                      className="bg-black border-yellow-500/30 text-yellow-100 placeholder:text-yellow-400/20 focus-visible:ring-yellow-500/50 h-10"
+                      placeholder="Your username"
+                      data-ocid="login.qr_username_input"
+                    />
+                  </div>
 
-              {/* Error state */}
-              <AnimatePresence>
-                {qrError && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -6 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    className="flex items-start gap-2 p-3 bg-destructive/10 border border-destructive/30 rounded-lg"
-                    data-ocid="login.qr.error_state"
+                  <div className="space-y-1.5">
+                    <Label className="text-yellow-400/70 text-xs font-medium">
+                      QR Card Image
+                    </Label>
+                    <button
+                      type="button"
+                      onClick={() => qrFileRef.current?.click()}
+                      className="w-full h-24 border border-dashed border-yellow-500/25 rounded-xl flex flex-col items-center justify-center gap-2 hover:border-yellow-500/50 hover:bg-yellow-500/5 transition-colors"
+                      data-ocid="login.qr_upload_button"
+                    >
+                      {qrDataUrl ? (
+                        <>
+                          <img
+                            src={qrDataUrl}
+                            alt="QR card"
+                            className="h-16 object-contain rounded"
+                          />
+                          <span className="text-[10px] text-yellow-400/50">
+                            {qrFileName}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <ImageIcon className="w-6 h-6 text-yellow-400/30" />
+                          <span className="text-xs text-yellow-400/40">
+                            Upload your QR card image
+                          </span>
+                        </>
+                      )}
+                    </button>
+                    <input
+                      ref={qrFileRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleQRFileChange}
+                      className="hidden"
+                    />
+                  </div>
+
+                  {qrError && (
+                    <div
+                      className="flex items-start gap-2 text-xs text-red-400/80 bg-red-400/10 border border-red-400/20 rounded-lg p-3"
+                      data-ocid="login.error_state"
+                    >
+                      <XCircle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                      {qrError}
+                    </div>
+                  )}
+
+                  {qrSuccess && (
+                    <div
+                      className="flex items-center gap-2 text-xs text-green-400/80 bg-green-400/10 border border-green-400/20 rounded-lg p-3"
+                      data-ocid="login.success_state"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
+                      Identity verified — signing in…
+                    </div>
+                  )}
+
+                  <Button
+                    onClick={handleQRLogin}
+                    disabled={
+                      isProcessingQR || !qrUsername.trim() || !qrDataUrl
+                    }
+                    className="w-full bg-yellow-500 hover:bg-yellow-400 text-black font-bold h-10 disabled:opacity-40"
+                    data-ocid="login.qr_submit_button"
                   >
-                    <XCircle className="w-4 h-4 text-destructive mt-0.5 shrink-0" />
-                    <p className="text-xs text-destructive">{qrError}</p>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+                    {isProcessingQR ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <>
+                        <QrCode className="w-4 h-4 mr-2" /> Verify & Sign In
+                      </>
+                    )}
+                  </Button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </div>
 
-              {/* Success state */}
-              <AnimatePresence>
-                {qrSuccess && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -6 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    className="flex items-center gap-2 p-3 bg-primary/10 border border-primary/30 rounded-lg"
-                    data-ocid="login.qr.success_state"
-                  >
-                    <CheckCircle2 className="w-4 h-4 text-primary shrink-0" />
-                    <p className="text-xs text-primary font-semibold">
-                      QR verified — signing in...
-                    </p>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              <Button
-                type="button"
-                onClick={handleQRLogin}
-                disabled={isProcessingQR || !qrUsername.trim() || !qrDataUrl}
-                className="w-full h-10 font-semibold bg-primary text-primary-foreground hover:bg-primary/90 gold-glow"
-                data-ocid="login.qr_submit_button"
-              >
-                {isProcessingQR ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Verifying...
-                  </>
-                ) : (
-                  "Sign In with QR Card"
-                )}
-              </Button>
-
-              <div className="p-3 bg-muted/20 rounded-lg border border-border/50">
-                <p className="text-xs text-muted-foreground">
-                  <strong className="text-foreground">How it works:</strong>{" "}
-                  Enter your username and upload the QR card image assigned to
-                  you by a Class 6 admin. Your card is verified against the
-                  stored record.
-                </p>
-              </div>
-            </div>
-          )}
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.5, delay: 0.3 }}
-          className="grid grid-cols-3 gap-3"
-        >
-          {[
-            {
-              icon: Zap,
-              label: "Live Preview",
-              desc: "See changes in real-time",
-            },
-            {
-              icon: Shield,
-              label: "Class 6 Roles",
-              desc: "Admin & member access",
-            },
-            {
-              icon: Users,
-              label: "Team Projects",
-              desc: "Collaborate globally",
-            },
-          ].map(({ icon: Icon, label, desc }) => (
-            <div
-              key={label}
-              className="bg-card/50 border border-border/50 rounded-xl p-3 text-center"
-            >
-              <Icon className="w-5 h-5 text-primary mx-auto mb-1.5" />
-              <p className="text-xs font-semibold text-foreground">{label}</p>
-              <p className="text-xs text-muted-foreground">{desc}</p>
-            </div>
-          ))}
-        </motion.div>
-      </div>
+        <p className="text-center text-[10px] text-yellow-400/20 mt-6">
+          © {new Date().getFullYear()}. Built with love using{" "}
+          <a
+            href={`https://caffeine.ai?utm_source=caffeine-footer&utm_medium=referral&utm_content=${encodeURIComponent(window.location.hostname)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-yellow-400/40 transition-colors"
+          >
+            caffeine.ai
+          </a>
+        </p>
+      </motion.div>
     </div>
   );
 }

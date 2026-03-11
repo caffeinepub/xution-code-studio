@@ -50,7 +50,6 @@ export function useIsAdmin() {
   return useQuery({
     queryKey: ["isAdmin"],
     queryFn: async () => {
-      if (localStorage.getItem("xution_is_class6") === "true") return true;
       if (!actor) return false;
       return actor.isCallerAdmin();
     },
@@ -248,6 +247,10 @@ export function useAddAIPreference() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["aiPreferences"] });
+    },
+    onError: (err: unknown) => {
+      // Swallow IC0508 silently — callers handle it via try/catch with mutateAsync
+      if (isCanisterStopped(err)) return;
     },
   });
 }
