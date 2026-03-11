@@ -29,6 +29,11 @@ import {
   useRevertVersion,
   useUpdateProject,
 } from "@/hooks/useQueries";
+import {
+  type CustomTerm,
+  type KnowledgeChunk,
+  generateResponse,
+} from "@/utils/aiEngine";
 import { buildPreviewHtml, generateCode } from "@/utils/codeGenerator";
 import {
   ArrowLeft,
@@ -88,6 +93,20 @@ interface PromptHistoryItem {
   accepted: boolean;
 }
 
+interface ChatMessage {
+  id: string;
+  role: "ai" | "user";
+  text: string;
+  timestamp: number;
+}
+
+const AI_GREETING: ChatMessage = {
+  id: "greeting",
+  role: "ai",
+  text: "I'm your project AI. Describe what you want visually — say things like 'add a chat area at the top', 'make the title golden and bold', 'theme this like a space dashboard', or use emotion/sense words. I'll understand and build it for you.",
+  timestamp: Date.now(),
+};
+
 export default function EditorWorkspace({
   projectId,
   isAdmin,
@@ -123,10 +142,27 @@ export default function EditorWorkspace({
   const [showProposalDialog, setShowProposalDialog] = useState(false);
   const [promptHistory, setPromptHistory] = useState<PromptHistoryItem[]>([]);
 
+  // Conversational AI chat state
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    AI_GREETING,
+  ]);
+  const [isAiThinking, setIsAiThinking] = useState(false);
+  // Custom terms/knowledge loaded from aiPrefs (prefix-separated)
+  const [customTerms] = useState<CustomTerm[]>([]);
+  const [knowledge] = useState<KnowledgeChunk[]>([]);
+
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+
   const [showVersions, setShowVersions] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [showDeployModal, setShowDeployModal] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  const scrollChatToBottom = useCallback(() => {
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+  }, []);
 
   useEffect(() => {
     if (project) {
@@ -188,9 +224,45 @@ export default function EditorWorkspace({
       .catch(() => toast.error("Failed to copy link"));
   };
 
-  const handleAISubmit = () => {
+  const handleAISubmit = async () => {
     if (!aiPrompt.trim()) return;
-    const generated = generateCode(language, aiPrompt, aiPrefs);
+    const userText = aiPrompt.trim();
+
+    // Add user message to chat
+    const userMsg: ChatMessage = {
+      id: `u-${Date.now()}`,
+      role: "user",
+      text: userText,
+      timestamp: Date.now(),
+    };
+    setChatMessages((prev) => [...prev, userMsg]);
+    setTimeout(scrollChatToBottom, 50);
+
+    // Start AI thinking
+    setIsAiThinking(true);
+    await new Promise((r) => setTimeout(r, 600 + Math.random() * 400));
+
+    // Generate conversational response
+    const { response } = generateResponse(
+      userText,
+      customTerms,
+      knowledge,
+      aiPrefs,
+    );
+
+    // Add AI response to chat
+    const aiMsg: ChatMessage = {
+      id: `a-${Date.now()}`,
+      role: "ai",
+      text: response,
+      timestamp: Date.now(),
+    };
+    setChatMessages((prev) => [...prev, aiMsg]);
+    setIsAiThinking(false);
+    setTimeout(scrollChatToBottom, 50);
+
+    // Also generate the code proposal
+    const generated = generateCode(language, userText, aiPrefs);
     setProposedFiles(generated);
   };
 
@@ -245,6 +317,15 @@ export default function EditorWorkspace({
       },
       ...prev,
     ]);
+    // Add a rejection note to chat
+    const rejectMsg: ChatMessage = {
+      id: `r-${Date.now()}`,
+      role: "ai",
+      text: "No problem — the changes have been discarded. Tell me what you'd like differently and I'll try again.",
+      timestamp: Date.now(),
+    };
+    setChatMessages((prev) => [...prev, rejectMsg]);
+    setTimeout(scrollChatToBottom, 50);
     setProposedFiles(null);
     setShowProposalDialog(false);
     setAiPrompt("");
@@ -253,7 +334,6 @@ export default function EditorWorkspace({
   const handleRevert = async (versionId: string) => {
     if (localMode) {
       localMode.onRevert(versionId);
-      // Re-sync files from the reverted project state
       toast.success("Reverted to version!");
       return;
     }
@@ -486,106 +566,157 @@ export default function EditorWorkspace({
             </div>
           )}
 
-          {!proposedFiles && (
-            <div className="p-3 border-b border-border/30">
-              <Textarea
-                value={aiPrompt}
-                onChange={(e) => setAiPrompt(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey))
-                    handleAISubmit();
-                }}
-                placeholder="Describe what you want to change visually — e.g. 'add a red button at the top', 'make the title bigger', 'change the background to dark'..."
-                className="min-h-[90px] text-xs bg-muted/30 border-border focus:border-primary resize-none"
-                data-ocid="editor.ai_input"
-              />
-              <Button
-                type="button"
-                className="w-full mt-2 h-8 text-xs bg-primary text-primary-foreground hover:bg-primary/90 gap-1"
-                onClick={handleAISubmit}
-                disabled={!aiPrompt.trim()}
-                data-ocid="editor.ai_submit_button"
+          {/* Chat history */}
+          <div
+            ref={chatScrollRef}
+            className="flex-1 overflow-y-auto px-3 py-3 space-y-3 min-h-0"
+            data-ocid="editor.ai_chat"
+          >
+            {chatMessages.map((msg) => (
+              <div
+                key={msg.id}
+                className={`flex ${
+                  msg.role === "user" ? "justify-end" : "justify-start"
+                }`}
               >
-                <Send className="w-3 h-3" /> Generate Code
-              </Button>
-              <p className="text-xs text-muted-foreground mt-1 text-center opacity-60">
-                Describe what you see and want changed — no code knowledge
-                needed
-              </p>
-            </div>
-          )}
-
-          {proposedFiles && (
-            <div
-              className="p-3 border-b border-border/50 flex flex-col gap-2"
-              data-ocid="ai.inline_proposal"
-            >
-              <div className="flex items-center gap-2 mb-1">
-                <Bot className="w-3.5 h-3.5 text-primary" />
-                <span className="text-xs font-semibold text-primary">
-                  Proposed Changes
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setShowProposalDialog(true)}
-                  className="ml-auto text-xs text-muted-foreground hover:text-foreground underline"
-                >
-                  Full view
-                </button>
-              </div>
-              <div className="space-y-2">
-                {proposedFiles.map((f) => (
-                  <div key={f.filename}>
-                    <div className="flex items-center gap-1.5 mb-1">
-                      <FileCode className="w-3 h-3 text-primary" />
-                      <span className="text-xs font-mono text-primary">
-                        {f.filename}
-                      </span>
-                    </div>
-                    <pre
-                      className="code-editor text-xs p-2 rounded overflow-y-auto whitespace-pre-wrap"
-                      style={{ maxHeight: "150px" }}
-                    >
-                      {f.content.slice(0, 800)}
-                      {f.content.length > 800 ? "\n...(more)" : ""}
-                    </pre>
+                {msg.role === "ai" && (
+                  <div className="w-5 h-5 rounded-full bg-primary/10 border border-primary/30 flex items-center justify-center flex-shrink-0 mt-0.5 mr-2">
+                    <Bot className="w-3 h-3 text-primary" />
                   </div>
-                ))}
-              </div>
-              <Button
-                type="button"
-                className="w-full h-9 text-sm font-semibold bg-primary text-primary-foreground hover:bg-primary/90 gap-2 mt-1"
-                onClick={handleAcceptProposal}
-                disabled={isApplying}
-                data-ocid="ai.inline_accept_button"
-              >
-                {isApplying ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" /> Applying...
-                  </>
-                ) : (
-                  <>
-                    <Check className="w-4 h-4" /> Accept &amp; Apply
-                  </>
                 )}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full h-7 text-xs border-border gap-1"
-                onClick={handleRejectProposal}
-                data-ocid="ai.inline_reject_button"
-              >
-                <X className="w-3 h-3" /> Reject
-              </Button>
-            </div>
-          )}
+                <div
+                  className={`max-w-[82%] rounded-xl px-3 py-2 text-xs leading-relaxed ${
+                    msg.role === "ai"
+                      ? "bg-black/60 border-l-2 border-primary/50 text-foreground/90"
+                      : "bg-primary/15 text-primary font-medium"
+                  }`}
+                >
+                  {msg.text}
+                </div>
+              </div>
+            ))}
+            {isAiThinking && (
+              <div className="flex justify-start">
+                <div className="w-5 h-5 rounded-full bg-primary/10 border border-primary/30 flex items-center justify-center flex-shrink-0 mt-0.5 mr-2">
+                  <Bot className="w-3 h-3 text-primary" />
+                </div>
+                <div className="bg-black/60 border-l-2 border-primary/50 rounded-xl px-3 py-2 flex items-center gap-1">
+                  {[0, 1, 2].map((j) => (
+                    <span
+                      key={j}
+                      className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce"
+                      style={{ animationDelay: `${j * 0.15}s` }}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
 
-          <div className="flex-1 overflow-hidden">
-            <p className="px-3 py-2 text-xs text-muted-foreground font-semibold uppercase tracking-wider">
+          {/* Input area */}
+          <div className="border-t border-border/50 p-3 flex-shrink-0">
+            {!proposedFiles ? (
+              <>
+                <Textarea
+                  value={aiPrompt}
+                  onChange={(e) => setAiPrompt(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey))
+                      handleAISubmit();
+                  }}
+                  placeholder="Describe what you want to change visually…"
+                  className="min-h-[72px] text-xs bg-muted/30 border-border focus:border-primary resize-none"
+                  data-ocid="editor.ai_input"
+                  disabled={isAiThinking}
+                />
+                <Button
+                  type="button"
+                  className="w-full mt-2 h-8 text-xs bg-primary text-primary-foreground hover:bg-primary/90 gap-1"
+                  onClick={handleAISubmit}
+                  disabled={!aiPrompt.trim() || isAiThinking}
+                  data-ocid="editor.ai_submit_button"
+                >
+                  {isAiThinking ? (
+                    <>
+                      <Loader2 className="w-3 h-3 animate-spin" /> Thinking...
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-3 h-3" /> Generate Code
+                    </>
+                  )}
+                </Button>
+              </>
+            ) : (
+              <div className="space-y-2" data-ocid="ai.inline_proposal">
+                <div className="flex items-center gap-2 mb-1">
+                  <Bot className="w-3.5 h-3.5 text-primary" />
+                  <span className="text-xs font-semibold text-primary">
+                    Proposed Changes
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowProposalDialog(true)}
+                    className="ml-auto text-xs text-muted-foreground hover:text-foreground underline"
+                  >
+                    Full view
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {proposedFiles.map((f) => (
+                    <div key={f.filename}>
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <FileCode className="w-3 h-3 text-primary" />
+                        <span className="text-xs font-mono text-primary">
+                          {f.filename}
+                        </span>
+                      </div>
+                      <pre
+                        className="code-editor text-xs p-2 rounded overflow-y-auto whitespace-pre-wrap"
+                        style={{ maxHeight: "100px" }}
+                      >
+                        {f.content.slice(0, 500)}
+                        {f.content.length > 500 ? "\n...(more)" : ""}
+                      </pre>
+                    </div>
+                  ))}
+                </div>
+                <Button
+                  type="button"
+                  className="w-full h-9 text-sm font-semibold bg-primary text-primary-foreground hover:bg-primary/90 gap-2 mt-1"
+                  onClick={handleAcceptProposal}
+                  disabled={isApplying}
+                  data-ocid="ai.inline_accept_button"
+                >
+                  {isApplying ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" /> Applying...
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4" /> Accept &amp; Apply
+                    </>
+                  )}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full h-7 text-xs border-border gap-1"
+                  onClick={handleRejectProposal}
+                  data-ocid="ai.inline_reject_button"
+                >
+                  <X className="w-3 h-3" /> Reject
+                </Button>
+              </div>
+            )}
+          </div>
+
+          {/* Prompt History */}
+          <div className="border-t border-border/30 flex-shrink-0">
+            <p className="px-3 py-1.5 text-xs text-muted-foreground font-semibold uppercase tracking-wider">
               Prompt History
             </p>
-            <ScrollArea className="h-40">
+            <ScrollArea className="h-28">
               {promptHistory.length === 0 ? (
                 <p
                   className="px-3 text-xs text-muted-foreground"
@@ -594,12 +725,14 @@ export default function EditorWorkspace({
                   No prompts yet
                 </p>
               ) : (
-                <div className="space-y-1 px-2">
+                <div className="space-y-1 px-2 pb-2">
                   {promptHistory.map((h) => (
                     <div key={h.id} className="bg-muted/20 rounded p-2">
                       <div className="flex items-center gap-1 mb-0.5">
                         <span
-                          className={`text-xs font-medium ${h.accepted ? "text-green-400" : "text-red-400"}`}
+                          className={`text-xs font-medium ${
+                            h.accepted ? "text-green-400" : "text-red-400"
+                          }`}
                         >
                           {h.accepted ? "✓" : "✗"}
                         </span>

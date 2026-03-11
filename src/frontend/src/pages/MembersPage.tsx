@@ -22,63 +22,138 @@ function fileToDataURL(file: File): Promise<string> {
   });
 }
 
-function scanQRFromCanvas(
+/** Apply grayscale+threshold to a canvas in place for better QR detection */
+function applyHighContrast(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+) {
+  const imageData = ctx.getImageData(0, 0, w, h);
+  const d = imageData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    const val = gray < 128 ? 0 : 255;
+    d[i] = d[i + 1] = d[i + 2] = val;
+    d[i + 3] = 255;
+  }
+  ctx.putImageData(imageData, 0, 0);
+}
+
+function tryDecode(
   ctx: CanvasRenderingContext2D,
   w: number,
   h: number,
 ): string | null {
-  const imageData = ctx.getImageData(0, 0, w, h);
-  const code = jsQR(imageData.data, imageData.width, imageData.height);
-  return code?.data ?? null;
+  try {
+    const imageData = ctx.getImageData(0, 0, w, h);
+    const code = jsQR(imageData.data, imageData.width, imageData.height);
+    return code?.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Scan full image at various scales, with and without high-contrast filter */
+function scanFullImage(img: HTMLImageElement): string | null {
+  const scales = [1, 2, 1.5, 0.75, 3, 0.5];
+  for (const scale of scales) {
+    for (const highContrast of [false, true]) {
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      if (w < 10 || h < 10) continue;
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) continue;
+      ctx.drawImage(img, 0, 0, w, h);
+      if (highContrast) applyHighContrast(ctx, w, h);
+      const result = tryDecode(ctx, w, h);
+      if (result) return result;
+    }
+  }
+  return null;
+}
+
+/** Scan quadrants and thirds of the image to find a QR code embedded in a card */
+function scanRegions(img: HTMLImageElement): string | null {
+  const scale = img.width > 1000 ? 1 : 2;
+  const W = Math.round(img.width * scale);
+  const H = Math.round(img.height * scale);
+
+  const fullCanvas = document.createElement("canvas");
+  fullCanvas.width = W;
+  fullCanvas.height = H;
+  const fullCtx = fullCanvas.getContext("2d");
+  if (!fullCtx) return null;
+  fullCtx.drawImage(img, 0, 0, W, H);
+
+  const hw = Math.floor(W / 2);
+  const hh = Math.floor(H / 2);
+  const regions: [number, number, number, number][] = [
+    [0, 0, hw, hh],
+    [hw, 0, W - hw, hh],
+    [0, hh, hw, H - hh],
+    [hw, hh, W - hw, H - hh],
+    [0, 0, Math.floor(W / 3), H],
+    [Math.floor((W * 2) / 3), 0, Math.ceil(W / 3), H],
+    [0, 0, W, Math.floor(H / 3)],
+    [0, Math.floor((H * 2) / 3), W, Math.ceil(H / 3)],
+  ];
+
+  for (const [sx, sy, sw, sh] of regions) {
+    if (sw < 20 || sh < 20) continue;
+    for (const highContrast of [false, true]) {
+      const crop = document.createElement("canvas");
+      crop.width = sw;
+      crop.height = sh;
+      const cropCtx = crop.getContext("2d");
+      if (!cropCtx) continue;
+      cropCtx.drawImage(fullCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
+      if (highContrast) applyHighContrast(cropCtx, sw, sh);
+      const result = tryDecode(cropCtx, sw, sh);
+      if (result) return result;
+    }
+  }
+  return null;
+}
+
+function parseXUTFromQRData(rawData: string): string | null {
+  try {
+    const payload = JSON.parse(rawData);
+    const xut =
+      payload.xut ??
+      payload.xutNumber ??
+      payload.XUT ??
+      payload.xut_number ??
+      payload.XUTNumber ??
+      payload.xutNum ??
+      null;
+    if (xut) return String(xut);
+  } catch {
+    /* not JSON */
+  }
+  const patternMatch = rawData.match(/XUT[-_]?[A-Z0-9]+/i);
+  if (patternMatch) return patternMatch[0].toUpperCase();
+  const trimmed = rawData.trim();
+  if (/^[A-Z0-9]{4,24}$/i.test(trimmed)) return trimmed.toUpperCase();
+  return null;
 }
 
 function extractXUTFromCardImage(dataUrl: string): Promise<string | null> {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
-      const attempt = (scale: number): string | null => {
-        try {
-          const w = Math.round(img.width * scale);
-          const h = Math.round(img.height * scale);
-          if (w === 0 || h === 0) return null;
-          const canvas = document.createElement("canvas");
-          canvas.width = w;
-          canvas.height = h;
-          const ctx = canvas.getContext("2d");
-          if (!ctx) return null;
-          ctx.drawImage(img, 0, 0, w, h);
-          return scanQRFromCanvas(ctx, w, h);
-        } catch {
-          return null;
-        }
-      };
-
-      const rawData = attempt(1) ?? attempt(2) ?? attempt(0.5) ?? attempt(3);
-      if (!rawData) return resolve(null);
-
-      // Try JSON payload
-      try {
-        const payload = JSON.parse(rawData);
-        const xut =
-          payload.xut ??
-          payload.xutNumber ??
-          payload.XUT ??
-          payload.xut_number ??
-          payload.XUTNumber ??
-          null;
-        if (xut) return resolve(String(xut));
-      } catch {
-        /* not JSON */
+      const full = scanFullImage(img);
+      if (full) {
+        const xut = parseXUTFromQRData(full);
+        return resolve(xut ?? (full.trim().slice(0, 32) || null));
       }
-
-      // Plain string patterns
-      const patternMatch = rawData.match(/XUT[-_]?\d+/i);
-      if (patternMatch) return resolve(patternMatch[0]);
-
-      // Short alphanumeric — treat as XUT
-      const trimmed = rawData.trim();
-      if (/^[A-Z0-9]{4,20}$/i.test(trimmed)) return resolve(trimmed);
-
+      const regional = scanRegions(img);
+      if (regional) {
+        const xut = parseXUTFromQRData(regional);
+        return resolve(xut ?? (regional.trim().slice(0, 32) || null));
+      }
       resolve(null);
     };
     img.onerror = () => resolve(null);
