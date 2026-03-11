@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import { useActor } from "@/hooks/useActor";
 import { useInternetIdentity } from "@/hooks/useInternetIdentity";
+import { useLocalProjects } from "@/hooks/useLocalProjects";
 import {
   isCanisterStopped,
   useCallerProfile,
@@ -47,7 +48,109 @@ export default function App() {
   return <MainApp />;
 }
 
+// ─── Local-mode app (no backend canister required) ────────────────────────────
+function LocalModeApp({
+  username,
+  onSignOut,
+}: {
+  username: string;
+  onSignOut: () => void;
+}) {
+  const {
+    projects,
+    versions,
+    createProject,
+    updateProject,
+    deleteProject,
+    addVersion,
+    revertVersion,
+  } = useLocalProjects();
+  const isAdmin = CLASS6_USERNAMES.has(username);
+  const [page, setPage] = useState<Page>("dashboard");
+  const [openProjectIds, setOpenProjectIds] = useState<string[]>([]);
+
+  const handleNavigate = (targetPage: Page) => {
+    if ((targetPage === "members" || targetPage === "training") && !isAdmin)
+      return;
+    setPage(targetPage);
+  };
+
+  return (
+    <>
+      <Layout
+        currentPage={page}
+        onNavigate={handleNavigate}
+        localOverrides={{ username, isAdmin, onSignOut }}
+      >
+        {page === "dashboard" && (
+          <DashboardPage
+            onOpenProject={(id) => {
+              setOpenProjectIds((prev) =>
+                prev.includes(id) ? prev : [...prev, id],
+              );
+              setPage("editor");
+            }}
+            onNavigate={handleNavigate}
+            localMode={{
+              projects,
+              isAdmin,
+              onCreate: createProject,
+              onDelete: deleteProject,
+            }}
+          />
+        )}
+        {page === "editor" && (
+          <EditorPage
+            openProjectIds={openProjectIds}
+            onAddProject={() => setPage("dashboard")}
+            onCloseProject={(id) =>
+              setOpenProjectIds((prev) => prev.filter((p) => p !== id))
+            }
+            onBackToProjects={() => setPage("dashboard")}
+            localMode={{
+              projects,
+              versions,
+              isAdmin,
+              onSave: updateProject,
+              onAddVersion: addVersion,
+              onRevert: revertVersion,
+            }}
+          />
+        )}
+        {page === "members" && isAdmin && <MembersPage />}
+        {page === "training" && isAdmin && <TrainingPage />}
+      </Layout>
+      <Toaster />
+    </>
+  );
+}
+
+// ─── Main app (with backend) ──────────────────────────────────────────────────
 function MainApp() {
+  // Check for local session first — bypasses canister entirely
+  const [localUser, setLocalUser] = useState<string | null>(() =>
+    localStorage.getItem("xution_local_session"),
+  );
+
+  if (localUser) {
+    return (
+      <LocalModeApp
+        username={localUser}
+        onSignOut={() => {
+          localStorage.removeItem("xution_local_session");
+          localStorage.removeItem("xution_is_class6");
+          localStorage.removeItem("xution_class6_pending");
+          setLocalUser(null);
+        }}
+      />
+    );
+  }
+
+  return <BackendApp onLocalLogin={setLocalUser} />;
+}
+
+// ─── Backend-connected app (Internet Identity + canister) ─────────────────────
+function BackendApp({ onLocalLogin }: { onLocalLogin: (u: string) => void }) {
   const { identity, isInitializing, clear } = useInternetIdentity();
   const isLoggedIn = !!identity;
   const { actor, isFetching: actorFetching } = useActor();
@@ -112,7 +215,6 @@ function MainApp() {
           refetchIsAdmin();
         },
         onError: (err) => {
-          // Even if save failed, let the user in so they're not stuck
           if (!isCanisterStopped(err)) {
             localStorage.setItem("xution_is_class6", "true");
           }
@@ -174,7 +276,7 @@ function MainApp() {
   if (!isLoggedIn) {
     return (
       <>
-        <LoginPage />
+        <LoginPage onLocalLogin={onLocalLogin} />
         <Toaster />
       </>
     );
@@ -239,7 +341,6 @@ function MainApp() {
     );
   }
 
-  // Canister stopped (IC0508) -- show friendly offline screen
   if (profileError && isCanisterStopped(profileErrorObj)) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -250,7 +351,7 @@ function MainApp() {
           </p>
           <p className="text-sm text-muted-foreground">
             The backend canister is restarting. This usually takes less than a
-            minute. Please try again shortly.
+            minute.
           </p>
           <div className="flex gap-3">
             <Button
@@ -277,7 +378,6 @@ function MainApp() {
     );
   }
 
-  // Only show the profile loading spinner while the query is actively in flight.
   const profileStillLoading =
     profileLoading || (profileFetching && !profileSuccess && !profileError);
 

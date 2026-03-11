@@ -1,16 +1,13 @@
 import type { ProjectFile } from "@/backend";
 import { Language, UserRole } from "@/backend";
-import type { Principal } from "@icp-sdk/core/principal";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useActor } from "./useActor";
 
-/** Returns true when an error is IC0508 (canister stopped). */
 export function isCanisterStopped(err: unknown): boolean {
   const msg = String(err);
   return msg.includes("IC0508") || msg.includes("is stopped");
 }
 
-// Wraps a promise with a hard timeout so profile loading never hangs forever
 function withTimeout<T>(promise: Promise<T>, ms = 8000): Promise<T | null> {
   return Promise.race([
     promise,
@@ -27,7 +24,7 @@ export function useCallerProfile() {
       try {
         return await withTimeout(actor.getCallerUserProfile(), 8000);
       } catch (err) {
-        if (isCanisterStopped(err)) throw err; // surface stopped errors
+        if (isCanisterStopped(err)) throw err;
         return null;
       }
     },
@@ -53,7 +50,6 @@ export function useIsAdmin() {
   return useQuery({
     queryKey: ["isAdmin"],
     queryFn: async () => {
-      // Local Class 6 flag takes priority — works even if backend is slow
       if (localStorage.getItem("xution_is_class6") === "true") return true;
       if (!actor) return false;
       return actor.isCallerAdmin();
@@ -116,7 +112,11 @@ export function useAIPreferenceRules() {
     queryKey: ["aiPreferences"],
     queryFn: async () => {
       if (!actor) return [];
-      return actor.getAIPreferenceRules();
+      try {
+        return await actor.getAIPreferenceRules();
+      } catch {
+        return [];
+      }
     },
     enabled: !!actor && !isFetching,
   });
@@ -266,32 +266,110 @@ export function useRemoveAIPreference() {
   });
 }
 
+// ─── Member management ─────────────────────────────────────────────────────────
+// Stored as AI preference rules with "__MEMBER__:" prefix
+
+const MEMBER_PREFIX = "__MEMBER__:";
+
+export interface MemberRecord {
+  username: string;
+  xutNumber: string;
+  qrCardData: string;
+  createdAt: number;
+}
+
+function encodeMember(m: MemberRecord): string {
+  return MEMBER_PREFIX + JSON.stringify(m);
+}
+
+function decodeMember(raw: string): MemberRecord | null {
+  if (!raw.startsWith(MEMBER_PREFIX)) return null;
+  try {
+    return JSON.parse(raw.slice(MEMBER_PREFIX.length)) as MemberRecord;
+  } catch {
+    return null;
+  }
+}
+
+export function useGetMembers() {
+  const { actor, isFetching } = useActor();
+  return useQuery({
+    queryKey: ["members"],
+    queryFn: async () => {
+      if (!actor) return [];
+      try {
+        const rules = await actor.getAIPreferenceRules();
+        return rules
+          .map(decodeMember)
+          .filter((m): m is MemberRecord => m !== null);
+      } catch {
+        return [];
+      }
+    },
+    enabled: !!actor && !isFetching,
+  });
+}
+
 export function useAddMember() {
   const { actor } = useActor();
+  const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (args: { userId: Principal; username: string }) => {
-      if (!actor) throw new Error("Not connected");
-      await actor.addMember(args.userId, args.username);
+    mutationFn: async (args: {
+      username: string;
+      qrCardData: string;
+      xutNumber: string;
+    }) => {
+      if (!actor) throw new Error("Not connected to backend");
+      const record: MemberRecord = {
+        username: args.username.trim(),
+        xutNumber: args.xutNumber.trim(),
+        qrCardData: args.qrCardData,
+        createdAt: Date.now(),
+      };
+      await actor.addAIPreferenceRule(encodeMember(record));
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["members"] });
+      qc.invalidateQueries({ queryKey: ["aiPreferences"] });
     },
   });
 }
 
 export function useRemoveMember() {
   const { actor } = useActor();
+  const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (userId: Principal) => {
-      if (!actor) throw new Error("Not connected");
-      await actor.removeMember(userId);
+    mutationFn: async (username: string) => {
+      if (!actor) throw new Error("Not connected to backend");
+      const rules = await actor.getAIPreferenceRules();
+      const idx = rules.findIndex((r) => {
+        const m = decodeMember(r);
+        return m?.username === username;
+      });
+      if (idx === -1) throw new Error(`Member "${username}" not found`);
+      await actor.removeAIPreferenceRule(BigInt(idx));
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["members"] });
+      qc.invalidateQueries({ queryKey: ["aiPreferences"] });
     },
   });
 }
 
-export function useUpdateUserRole() {
+export function useGetMemberQR() {
   const { actor } = useActor();
   return useMutation({
-    mutationFn: async (args: { userId: Principal; role: UserRole }) => {
-      if (!actor) throw new Error("Not connected");
-      await actor.updateUserRole(args.userId, args.role);
+    mutationFn: async (username: string): Promise<string | null> => {
+      if (!actor) return null;
+      try {
+        const rules = await actor.getAIPreferenceRules();
+        const member = rules
+          .map(decodeMember)
+          .find((m) => m?.username === username);
+        return member?.qrCardData ?? null;
+      } catch {
+        return null;
+      }
     },
   });
 }
@@ -306,8 +384,6 @@ export function useSeedDefaultUsers() {
   });
 }
 
-// Cast actor to any for getLogo/setLogo since these methods exist on the
-// backend but aren't yet reflected in the auto-generated binding types.
 export function useLogo() {
   const { actor, isFetching } = useActor();
   return useQuery({
@@ -333,7 +409,7 @@ export function useSetLogo() {
       try {
         await (actor as any).setLogo(data);
       } catch {
-        // silently fail if method doesn't exist on backend
+        // silently fail
       }
     },
     onSuccess: () => {

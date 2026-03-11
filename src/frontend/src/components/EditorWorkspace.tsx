@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import type { LocalProject } from "@/hooks/useLocalProjects";
 import {
   useAIPreferenceRules,
   useAddVersion,
@@ -55,10 +56,29 @@ const LANGUAGE_LABELS: Record<Language, string> = {
   [Language.cpp]: "C++",
 };
 
+interface LocalWorkspaceMode {
+  project: LocalProject | null;
+  versions: {
+    versionId: string;
+    prompt: string;
+    files: ProjectFile[];
+    createdAt: bigint;
+  }[];
+  isAdmin: boolean;
+  onSave: (
+    updates: Partial<
+      Pick<LocalProject, "title" | "language" | "files" | "isGlobal">
+    >,
+  ) => void;
+  onAddVersion: (prompt: string, files: ProjectFile[]) => void;
+  onRevert: (versionId: string) => void;
+}
+
 interface EditorWorkspaceProps {
   projectId: string;
   isAdmin: boolean;
   onBackToProjects?: () => void;
+  localMode?: LocalWorkspaceMode;
 }
 
 interface PromptHistoryItem {
@@ -72,13 +92,23 @@ export default function EditorWorkspace({
   projectId,
   isAdmin,
   onBackToProjects,
+  localMode,
 }: EditorWorkspaceProps) {
-  const { data: project, isLoading } = useProject(projectId);
-  const { data: versions = [] } = useProjectVersions(projectId);
+  const { data: backendProject, isLoading: backendLoading } = useProject(
+    localMode ? null : projectId,
+  );
+  const { data: backendVersions = [] } = useProjectVersions(
+    localMode ? null : projectId,
+  );
   const { data: aiPrefs = [] } = useAIPreferenceRules();
   const updateProject = useUpdateProject();
   const addVersion = useAddVersion();
   const revertVersion = useRevertVersion();
+
+  // Resolved project + versions (local or backend)
+  const project = localMode ? localMode.project : backendProject;
+  const versions = localMode ? localMode.versions : backendVersions;
+  const isLoading = localMode ? false : backendLoading;
 
   const [localFiles, setLocalFiles] = useState<ProjectFile[]>([]);
   const [activeFile, setActiveFile] = useState(0);
@@ -129,6 +159,11 @@ export default function EditorWorkspace({
 
   const handleSave = async () => {
     if (!project) return;
+    if (localMode) {
+      localMode.onSave({ title, language, files: localFiles, isGlobal });
+      toast.success("Project saved!");
+      return;
+    }
     try {
       await updateProject.mutateAsync({
         projectId,
@@ -143,20 +178,14 @@ export default function EditorWorkspace({
     }
   };
 
-  const handleDeploy = () => {
-    setShowDeployModal(true);
-  };
+  const handleDeploy = () => setShowDeployModal(true);
 
   const handleCopyDeployUrl = () => {
     const url = `${window.location.origin}/#/preview/${projectId}`;
     navigator.clipboard
       .writeText(url)
-      .then(() => {
-        toast.success("Link copied!");
-      })
-      .catch(() => {
-        toast.error("Failed to copy link");
-      });
+      .then(() => toast.success("Link copied!"))
+      .catch(() => toast.error("Failed to copy link"));
   };
 
   const handleAISubmit = () => {
@@ -180,6 +209,13 @@ export default function EditorWorkspace({
       ...prev,
     ]);
     setAiPrompt("");
+    if (localMode) {
+      localMode.onAddVersion(p, proposedFiles);
+      localMode.onSave({ files: proposedFiles, title, language, isGlobal });
+      toast.success("Changes applied and saved!");
+      setProposedFiles(null);
+      return;
+    }
     try {
       await Promise.all([
         addVersion.mutateAsync({ projectId, prompt: p, files: proposedFiles }),
@@ -215,6 +251,12 @@ export default function EditorWorkspace({
   };
 
   const handleRevert = async (versionId: string) => {
+    if (localMode) {
+      localMode.onRevert(versionId);
+      // Re-sync files from the reverted project state
+      toast.success("Reverted to version!");
+      return;
+    }
     try {
       await revertVersion.mutateAsync({ projectId, versionId });
       toast.success("Reverted to version!");
@@ -242,7 +284,10 @@ export default function EditorWorkspace({
     );
   }
 
-  const isApplying = addVersion.isPending || updateProject.isPending;
+  const isSaving = localMode ? false : updateProject.isPending;
+  const isApplying = localMode
+    ? false
+    : addVersion.isPending || updateProject.isPending;
   const deployUrl = `${window.location.origin}/#/preview/${projectId}`;
 
   return (
@@ -298,7 +343,6 @@ export default function EditorWorkspace({
           </label>
         )}
         <div className="flex-1" />
-        {/* Deploy / Share Preview — visible to all users */}
         <Button
           type="button"
           variant="ghost"
@@ -307,8 +351,7 @@ export default function EditorWorkspace({
           className="h-7 text-xs gap-1 text-primary hover:bg-primary/10"
           data-ocid="editor.deploy_button"
         >
-          <Rocket className="w-3 h-3" />
-          Deploy
+          <Rocket className="w-3 h-3" /> Deploy
         </Button>
         {canPreview && (
           <Button
@@ -318,8 +361,7 @@ export default function EditorWorkspace({
             onClick={() => setShowPreview(!showPreview)}
             className={`h-7 text-xs gap-1 ${showPreview ? "text-primary" : "text-muted-foreground"}`}
           >
-            <Play className="w-3 h-3" />
-            Preview
+            <Play className="w-3 h-3" /> Preview
           </Button>
         )}
         <Button
@@ -329,21 +371,16 @@ export default function EditorWorkspace({
           onClick={() => setShowVersions(!showVersions)}
           className={`h-7 text-xs gap-1 ${showVersions ? "text-primary" : "text-muted-foreground"}`}
         >
-          <History className="w-3 h-3" />
-          History
+          <History className="w-3 h-3" /> History
         </Button>
         <Button
           type="button"
           size="sm"
           onClick={handleSave}
-          disabled={updateProject.isPending}
+          disabled={isSaving}
           className="h-7 text-xs bg-primary text-primary-foreground hover:bg-primary/90"
         >
-          {updateProject.isPending ? (
-            <Loader2 className="w-3 h-3 animate-spin" />
-          ) : (
-            "Save"
-          )}
+          {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : "Save"}
         </Button>
       </div>
 
@@ -449,7 +486,6 @@ export default function EditorWorkspace({
             </div>
           )}
 
-          {/* Prompt input — shown when no proposal pending */}
           {!proposedFiles && (
             <div className="p-3 border-b border-border/30">
               <Textarea
@@ -470,8 +506,7 @@ export default function EditorWorkspace({
                 disabled={!aiPrompt.trim()}
                 data-ocid="editor.ai_submit_button"
               >
-                <Send className="w-3 h-3" />
-                Generate Code
+                <Send className="w-3 h-3" /> Generate Code
               </Button>
               <p className="text-xs text-muted-foreground mt-1 text-center opacity-60">
                 Describe what you see and want changed — no code knowledge
@@ -480,7 +515,6 @@ export default function EditorWorkspace({
             </div>
           )}
 
-          {/* Inline proposal preview — shown when AI has generated code */}
           {proposedFiles && (
             <div
               className="p-3 border-b border-border/50 flex flex-col gap-2"
@@ -518,7 +552,6 @@ export default function EditorWorkspace({
                   </div>
                 ))}
               </div>
-              {/* Primary Accept & Apply — inline directly below the code */}
               <Button
                 type="button"
                 className="w-full h-9 text-sm font-semibold bg-primary text-primary-foreground hover:bg-primary/90 gap-2 mt-1"
@@ -566,9 +599,7 @@ export default function EditorWorkspace({
                     <div key={h.id} className="bg-muted/20 rounded p-2">
                       <div className="flex items-center gap-1 mb-0.5">
                         <span
-                          className={`text-xs font-medium ${
-                            h.accepted ? "text-green-400" : "text-red-400"
-                          }`}
+                          className={`text-xs font-medium ${h.accepted ? "text-green-400" : "text-red-400"}`}
                         >
                           {h.accepted ? "✓" : "✗"}
                         </span>
@@ -628,8 +659,7 @@ export default function EditorWorkspace({
                         disabled={revertVersion.isPending}
                         className="h-6 text-xs text-primary hover:text-primary w-full justify-start gap-1"
                       >
-                        <RotateCcw className="w-3 h-3" />
-                        Revert to this
+                        <RotateCcw className="w-3 h-3" /> Revert to this
                       </Button>
                     </div>
                   ))}
@@ -648,8 +678,7 @@ export default function EditorWorkspace({
         >
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Bot className="w-5 h-5 text-primary" />
-              Proposed Changes
+              <Bot className="w-5 h-5 text-primary" /> Proposed Changes
             </DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
@@ -711,12 +740,9 @@ export default function EditorWorkspace({
         >
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Rocket className="w-5 h-5 text-primary" />
-              Deploy Preview
+              <Rocket className="w-5 h-5 text-primary" /> Deploy Preview
             </DialogTitle>
           </DialogHeader>
-
-          {/* iframe preview for HTML projects */}
           {canPreview && (
             <div
               className="w-full rounded-md border border-border overflow-hidden"
@@ -730,8 +756,6 @@ export default function EditorWorkspace({
               />
             </div>
           )}
-
-          {/* Deploy URL row */}
           <div className="flex items-center gap-2">
             <Input
               readOnly
@@ -747,11 +771,9 @@ export default function EditorWorkspace({
               className="gap-1.5 border-primary text-primary hover:bg-primary/10 flex-shrink-0"
               data-ocid="editor.copy_url_button"
             >
-              <Copy className="w-3.5 h-3.5" />
-              Copy Link
+              <Copy className="w-3.5 h-3.5" /> Copy Link
             </Button>
           </div>
-
           <DialogFooter>
             <Button
               type="button"

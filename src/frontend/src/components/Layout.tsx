@@ -29,20 +29,28 @@ import { toast } from "sonner";
 
 type Page = "dashboard" | "editor" | "members" | "training";
 
+interface LocalOverrides {
+  username: string;
+  isAdmin: boolean;
+  onSignOut: () => void;
+}
+
 interface LayoutProps {
   children: React.ReactNode;
   currentPage: Page;
   onNavigate: (page: Page) => void;
+  localOverrides?: LocalOverrides;
 }
 
 export default function Layout({
   children,
   currentPage,
   onNavigate,
+  localOverrides,
 }: LayoutProps) {
   const { clear, identity } = useInternetIdentity();
   const { data: profile } = useCallerProfile();
-  const { data: isAdmin } = useIsAdmin();
+  const { data: isAdminData } = useIsAdmin();
   const { data: logoSrc } = useLogo();
   const setLogo = useSetLogo();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -50,14 +58,23 @@ export default function Layout({
   const principal = identity?.getPrincipal().toString() ?? "";
   const shortPrincipal = principal ? `${principal.slice(0, 8)}...` : "";
 
-  const handleSignOut = () => {
-    localStorage.removeItem("xution_is_class6");
-    localStorage.removeItem("xution_class6_pending");
-    clear();
-  };
+  // Local overrides take priority over backend-derived values
+  const effectiveUsername =
+    localOverrides?.username ?? profile?.username ?? shortPrincipal;
+  const effectiveIsAdmin = localOverrides
+    ? localOverrides.isAdmin
+    : (isAdminData ?? false);
+
+  const handleSignOut = localOverrides
+    ? localOverrides.onSignOut
+    : () => {
+        localStorage.removeItem("xution_is_class6");
+        localStorage.removeItem("xution_class6_pending");
+        clear();
+      };
 
   const handleLogoClick = () => {
-    if (isAdmin) {
+    if (effectiveIsAdmin) {
       fileInputRef.current?.click();
     }
   };
@@ -68,16 +85,26 @@ export default function Layout({
     const reader = new FileReader();
     reader.onload = async (ev) => {
       const dataUrl = ev.target?.result as string;
-      try {
-        await setLogo.mutateAsync(dataUrl);
+      if (localOverrides) {
+        // Store logo locally
+        localStorage.setItem("xution_local_logo", dataUrl);
         toast.success("Logo updated!");
-      } catch {
-        toast.error("Failed to update logo");
+      } else {
+        try {
+          await setLogo.mutateAsync(dataUrl);
+          toast.success("Logo updated!");
+        } catch {
+          toast.error("Failed to update logo");
+        }
       }
     };
     reader.readAsDataURL(file);
     e.target.value = "";
   };
+
+  const effectiveLogoSrc = localOverrides
+    ? (localStorage.getItem("xution_local_logo") ?? "")
+    : (logoSrc ?? "");
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -86,7 +113,7 @@ export default function Layout({
         <div className="flex items-center justify-between px-6 h-14">
           {/* Logo */}
           <div className="flex items-center gap-3">
-            {isAdmin ? (
+            {effectiveIsAdmin ? (
               <button
                 type="button"
                 className="relative group w-8 h-8 rounded-md border border-primary flex items-center justify-center overflow-hidden cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary"
@@ -95,9 +122,9 @@ export default function Layout({
                 aria-label="Change logo"
                 data-ocid="logo.button"
               >
-                {logoSrc ? (
+                {effectiveLogoSrc ? (
                   <img
-                    src={logoSrc}
+                    src={effectiveLogoSrc}
                     alt="Xution logo"
                     className="w-full h-full object-cover"
                   />
@@ -114,9 +141,9 @@ export default function Layout({
               </button>
             ) : (
               <div className="w-8 h-8 rounded-md border border-primary flex items-center justify-center overflow-hidden">
-                {logoSrc ? (
+                {effectiveLogoSrc ? (
                   <img
-                    src={logoSrc}
+                    src={effectiveLogoSrc}
                     alt="Xution logo"
                     className="w-full h-full object-cover"
                   />
@@ -126,7 +153,7 @@ export default function Layout({
               </div>
             )}
             {/* Hidden file input for logo upload */}
-            {isAdmin && (
+            {effectiveIsAdmin && (
               <input
                 ref={fileInputRef}
                 type="file"
@@ -139,7 +166,7 @@ export default function Layout({
             <span className="font-display font-bold text-lg gold-gradient">
               Xution Code Studio
             </span>
-            {isAdmin && (
+            {effectiveIsAdmin && (
               <Badge className="bg-primary/20 text-primary border-primary/40 text-xs">
                 Class 6
               </Badge>
@@ -162,7 +189,7 @@ export default function Layout({
               <Home className="w-4 h-4 mr-1" />
               Projects
             </Button>
-            {isAdmin && (
+            {effectiveIsAdmin && (
               <>
                 <Button
                   variant={currentPage === "members" ? "secondary" : "ghost"}
@@ -198,7 +225,7 @@ export default function Layout({
 
           {/* Right side: admin quick-access buttons + user menu */}
           <div className="flex items-center gap-2">
-            {isAdmin && (
+            {effectiveIsAdmin && (
               <div className="hidden md:flex items-center gap-2">
                 <Button
                   type="button"
@@ -235,10 +262,10 @@ export default function Layout({
                   data-ocid="nav.user_menu_button"
                 >
                   <div className="w-6 h-6 rounded-full bg-primary/30 border border-primary/50 flex items-center justify-center text-primary text-xs font-bold">
-                    {profile?.username?.[0]?.toUpperCase() ?? "?"}
+                    {effectiveUsername?.[0]?.toUpperCase() ?? "?"}
                   </div>
                   <span className="hidden md:inline text-sm">
-                    {profile?.username ?? shortPrincipal}
+                    {effectiveUsername}
                   </span>
                   <ChevronDown className="w-3 h-3 text-muted-foreground" />
                 </Button>
@@ -248,7 +275,7 @@ export default function Layout({
                   disabled
                   className="text-xs text-muted-foreground"
                 >
-                  {shortPrincipal}
+                  {localOverrides ? "Local Session" : shortPrincipal}
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
@@ -257,7 +284,7 @@ export default function Layout({
                 >
                   <Home className="w-4 h-4 mr-2" /> Back to Projects
                 </DropdownMenuItem>
-                {isAdmin && (
+                {effectiveIsAdmin && (
                   <>
                     <DropdownMenuItem
                       onClick={() => onNavigate("members")}

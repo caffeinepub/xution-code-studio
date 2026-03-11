@@ -26,6 +26,14 @@ actor {
     createdAt : Time.Time;
   };
 
+  // Members added by Class 6 — identified by username, authenticated via uploaded QR card
+  public type MemberEntry = {
+    username : Text;
+    xutNumber : Text;
+    qrCardData : Text; // base64 image data uploaded by Class 6
+    createdAt : Time.Time;
+  };
+
   public type Project = {
     id : Text;
     title : Text;
@@ -53,6 +61,7 @@ actor {
   include MixinAuthorization(accessControlState);
 
   let users = Map.empty<Principal, User>();
+  let members = Map.empty<Text, MemberEntry>(); // keyed by username
   let projects = Map.empty<Text, Project>();
   let versions = Map.empty<Text, List.List<Version>>();
   let aiPreferenceRules = Map.empty<Nat, Text>();
@@ -64,7 +73,7 @@ actor {
     public func compare(project1 : Project, project2 : Project) : Order.Order {
       switch (Text.compare(project1.title, project2.title)) {
         case (#equal) { Text.compare(project1.id, project2.id) };
-	      case (order) { order };
+        case (order) { order };
       };
     };
   };
@@ -81,7 +90,7 @@ actor {
     };
   };
 
-  // Logo management (Class 6 only to set, public to get)
+  // ── Logo ──────────────────────────────────────────────────────────────────
   public shared ({ caller }) func setLogo(data : Text) : async () {
     onlyClass6(caller);
     logoData := data;
@@ -91,83 +100,63 @@ actor {
     logoData;
   };
 
+  // ── Seed default Class 6 users ────────────────────────────────────────────
   public shared ({ caller }) func seedDefaultClass6Users() : async () {
-    // Silently skip if already seeded or caller is not admin
     if (isSeeded) { return };
     if (not AccessControl.isAdmin(accessControlState, caller)) { return };
-
-    let class6User1Principal = Principal.fromText("aaaaa-aa");
-    let class6User2Principal = Principal.fromText("aaaaa-aa");
-
-    let class6User1 : User = {
-      id = class6User1Principal;
-      username = "Unity";
-      role = #admin;
-      createdAt = Time.now();
-    };
-
-    let class6User2 : User = {
-      id = class6User2Principal;
-      username = "Syndelious";
-      role = #admin;
-      createdAt = Time.now();
-    };
-
-    users.add(class6User1Principal, class6User1);
-    users.add(class6User2Principal, class6User2);
     isSeeded := true;
   };
 
-  public shared ({ caller }) func addMember(userId : Principal, username : Text) : async () {
+  // ── Member management (username-based, no Principal required) ─────────────
+
+  public shared ({ caller }) func addMember(username : Text, qrCardData : Text, xutNumber : Text) : async () {
     onlyClass6(caller);
-    
-    let newUser : User = {
-      id = userId;
+    let entry : MemberEntry = {
       username;
-      role = #user;
+      xutNumber;
+      qrCardData;
       createdAt = Time.now();
     };
-    
-    users.add(userId, newUser);
-    AccessControl.assignRole(accessControlState, caller, userId, #user);
+    members.add(username, entry);
   };
 
-  public shared ({ caller }) func updateUserRole(userId : Principal, newRole : AccessControl.UserRole) : async () {
+  public shared ({ caller }) func removeMemberByUsername(username : Text) : async () {
     onlyClass6(caller);
-    
-    switch (users.get(userId)) {
-      case (?user) {
-        let updatedUser : User = {
-          id = user.id;
-          username = user.username;
-          role = newRole;
-          createdAt = user.createdAt;
-        };
-        users.add(userId, updatedUser);
-        AccessControl.assignRole(accessControlState, caller, userId, newRole);
-      };
-      case (null) { Runtime.trap("User not found") };
+    members.remove(username);
+  };
+
+  public query ({ caller }) func getMembers() : async [MemberEntry] {
+    onlyClass6(caller);
+    members.values().toArray();
+  };
+
+  // Public — used for QR login verification
+  public query func getMemberQR(username : Text) : async ?Text {
+    switch (members.get(username)) {
+      case (?entry) { ?entry.qrCardData };
+      case (null) { null };
     };
   };
 
-  public shared ({ caller }) func removeMember(userId : Principal) : async () {
-    onlyClass6(caller);
-    users.remove(userId);
+  public query func getMemberXUT(username : Text) : async ?Text {
+    switch (members.get(username)) {
+      case (?entry) { ?entry.xutNumber };
+      case (null) { null };
+    };
   };
+
+  // ── User profiles (Internet Identity callers) ─────────────────────────────
 
   public query ({ caller }) func getCallerUserProfile() : async ?User {
     users.get(caller);
   };
 
   public shared ({ caller }) func saveCallerUserProfile(username : Text) : async () {
-    // Any authenticated (non-anonymous) caller can save their profile.
     if (caller.isAnonymous()) {
       Runtime.trap("Anonymous users cannot save profiles");
     };
-    
     let role = AccessControl.getUserRole(accessControlState, caller);
     let resolvedRole : AccessControl.UserRole = if (role == #guest) { #user } else { role };
-    
     switch (users.get(caller)) {
       case (?user) {
         let updatedUser : User = {
@@ -190,35 +179,10 @@ actor {
     };
   };
 
-  public query ({ caller }) func getUserProfile(userId : Principal) : async ?User {
-    if (caller != userId and not AccessControl.isAdmin(accessControlState, caller)) {
-      Runtime.trap("Unauthorized: Can only view your own profile");
-    };
-    users.get(userId);
-  };
 
   public query ({ caller }) func getUser() : async User {
     switch (users.get(caller)) {
       case (?user) { user };
-      case (null) { Runtime.trap("User not found") };
-    };
-  };
-
-  public shared ({ caller }) func updateUsername(newUsername : Text) : async () {
-    if (caller.isAnonymous()) {
-      Runtime.trap("Anonymous users cannot update username");
-    };
-    
-    switch (users.get(caller)) {
-      case (?user) {
-        let updatedUser : User = {
-          id = user.id;
-          username = newUsername;
-          role = user.role;
-          createdAt = user.createdAt;
-        };
-        users.add(caller, updatedUser);
-      };
       case (null) { Runtime.trap("User not found") };
     };
   };
@@ -230,6 +194,8 @@ actor {
     users.values().toArray();
   };
 
+  // ── Projects ──────────────────────────────────────────────────────────────
+
   public shared ({ caller }) func createProject(
     title : Text,
     language : Language,
@@ -238,15 +204,12 @@ actor {
   ) : async Text {
     let isClass6 = AccessControl.isAdmin(accessControlState, caller);
     let isMember = AccessControl.hasPermission(accessControlState, caller, #user);
-    
     if (not (isClass6 or isMember)) {
       Runtime.trap("Unauthorized: Only Class 6 or members can create projects");
     };
-    
     if (isGlobal and not isClass6) {
       Runtime.trap("Unauthorized: Only Class 6 can create global projects");
     };
-
     let projectId = title.concat(Time.now().toText());
     let newProject : Project = {
       id = projectId;
@@ -258,7 +221,6 @@ actor {
       createdAt = Time.now();
       updatedAt = Time.now();
     };
-
     projects.add(projectId, newProject);
     projectId;
   };
@@ -273,12 +235,10 @@ actor {
     switch (projects.get(projectId)) {
       case (?existingProject) {
         onlyOwnerOrClass6(caller, existingProject.ownerId);
-        
         let isClass6 = AccessControl.isAdmin(accessControlState, caller);
         if (isGlobal and not isClass6) {
           Runtime.trap("Unauthorized: Only Class 6 can mark projects as global");
         };
-        
         let updatedProject : Project = {
           id = projectId;
           title;
@@ -289,7 +249,6 @@ actor {
           createdAt = existingProject.createdAt;
           updatedAt = Time.now();
         };
-
         projects.add(projectId, updatedProject);
       };
       case (null) { Runtime.trap("Project not found") };
@@ -307,11 +266,33 @@ actor {
     };
   };
 
+  public query ({ caller }) func getProject(projectId : Text) : async Project {
+    switch (projects.get(projectId)) {
+      case (?project) {
+        if (project.isGlobal or caller == project.ownerId or AccessControl.isAdmin(accessControlState, caller)) {
+          project;
+        } else {
+          Runtime.trap("Unauthorized");
+        };
+      };
+      case (null) { Runtime.trap("Project not found") };
+    };
+  };
+
+  public query ({ caller }) func getAllGlobalProjects() : async [Project] {
+    projects.values().toArray().filter(func(p) { p.isGlobal }).sort();
+  };
+
+  public query ({ caller }) func getCallerProjects() : async [Project] {
+    projects.values().toArray().filter(func(p) { p.ownerId == caller }).sort();
+  };
+
+  // ── Versions ──────────────────────────────────────────────────────────────
+
   public shared ({ caller }) func addVersion(projectId : Text, prompt : Text, files : [ProjectFile]) : async () {
     switch (projects.get(projectId)) {
       case (?project) {
         onlyOwnerOrClass6(caller, project.ownerId);
-        
         let versionId = prompt.concat(Time.now().toText());
         let newVersion : Version = {
           versionId;
@@ -319,12 +300,10 @@ actor {
           files;
           createdAt = Time.now();
         };
-
         let existingVersions = switch (versions.get(projectId)) {
           case (?vs) { vs };
           case (null) { List.empty<Version>() };
         };
-
         existingVersions.add(newVersion);
         versions.add(projectId, existingVersions);
       };
@@ -336,9 +315,8 @@ actor {
     switch (projects.get(projectId)) {
       case (?project) {
         if (not (project.isGlobal or caller == project.ownerId or AccessControl.isAdmin(accessControlState, caller))) {
-          Runtime.trap("Unauthorized: Cannot view versions for this project");
+          Runtime.trap("Unauthorized");
         };
-        
         switch (versions.get(projectId)) {
           case (?vs) { vs.toArray() };
           case (null) { [] };
@@ -352,7 +330,6 @@ actor {
     switch (projects.get(projectId), versions.get(projectId)) {
       case (?project, ?projectVersions) {
         onlyOwnerOrClass6(caller, project.ownerId);
-
         switch (projectVersions.find(func(v) { v.versionId == versionId })) {
           case (?targetVersion) {
             let revertedProject : Project = {
@@ -374,6 +351,8 @@ actor {
     };
   };
 
+  // ── AI Preferences ────────────────────────────────────────────────────────
+
   public shared ({ caller }) func addAIPreferenceRule(rule : Text) : async () {
     onlyClass6(caller);
     aiPreferenceRules.add(aiPreferenceRules.size(), rule);
@@ -384,34 +363,12 @@ actor {
     aiPreferenceRules.remove(index);
   };
 
-  public query ({ caller }) func getAIPreferenceRules() : async [Text] {
-    let result = Array.tabulate(aiPreferenceRules.size(), func(i : Nat) : Text {
+  public query func getAIPreferenceRules() : async [Text] {
+    Array.tabulate(aiPreferenceRules.size(), func(i : Nat) : Text {
       switch (aiPreferenceRules.get(i)) {
         case (?rule) { rule };
         case (null) { "" };
       };
     });
-    result;
-  };
-
-  public query ({ caller }) func getProject(projectId : Text) : async Project {
-    switch (projects.get(projectId)) {
-      case (?project) {
-        if (project.isGlobal or caller == project.ownerId or AccessControl.isAdmin(accessControlState, caller)) {
-          project;
-        } else {
-          Runtime.trap("Unauthorized: Only project owner or Class 6 can view this project");
-        };
-      };
-      case (null) { Runtime.trap("Project not found") };
-    };
-  };
-
-  public query ({ caller }) func getAllGlobalProjects() : async [Project] {
-    projects.values().toArray().filter(func(p) { p.isGlobal }).sort();
-  };
-
-  public query ({ caller }) func getCallerProjects() : async [Project] {
-    projects.values().toArray().filter(func(p) { p.ownerId == caller }).sort();
   };
 };

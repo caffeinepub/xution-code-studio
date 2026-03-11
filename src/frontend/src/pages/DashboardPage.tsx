@@ -1,5 +1,5 @@
 import { Language } from "@/backend";
-import type { Project } from "@/backend";
+import type { ProjectFile } from "@/backend";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import type { LocalProject } from "@/hooks/useLocalProjects";
 import {
   useCallerProjects,
   useCreateProject,
@@ -55,19 +56,33 @@ const LANGUAGE_COLORS: Record<Language, string> = {
   [Language.cpp]: "text-green-400",
 };
 
+interface LocalModeOps {
+  projects: LocalProject[];
+  isAdmin: boolean;
+  onCreate: (
+    title: string,
+    lang: Language,
+    files: ProjectFile[],
+    isGlobal: boolean,
+  ) => string;
+  onDelete: (id: string) => void;
+}
+
 interface DashboardProps {
   onOpenProject: (projectId: string) => void;
   onNavigate: (page: "members" | "training") => void;
+  localMode?: LocalModeOps;
 }
 
 export default function DashboardPage({
   onOpenProject,
   onNavigate,
+  localMode,
 }: DashboardProps) {
   const { data: myProjects = [], isLoading: loadingMine } = useCallerProjects();
   const { data: globalProjects = [], isLoading: loadingGlobal } =
     useGlobalProjects();
-  const { data: isAdmin } = useIsAdmin();
+  const { data: isAdminData } = useIsAdmin();
   const createProject = useCreateProject();
   const deleteProject = useDeleteProject();
 
@@ -75,51 +90,81 @@ export default function DashboardPage({
   const [newTitle, setNewTitle] = useState("");
   const [newLang, setNewLang] = useState<Language>(Language.html_single);
   const [newIsGlobal, setNewIsGlobal] = useState(false);
+  const [localCreating, setLocalCreating] = useState(false);
+
+  // Effective values — local mode overrides backend
+  const isAdmin = localMode ? localMode.isAdmin : (isAdminData ?? false);
+  const effectiveProjects = localMode
+    ? localMode.projects
+    : [
+        ...myProjects,
+        ...globalProjects.filter((g) => !myProjects.find((m) => m.id === g.id)),
+      ];
+  const isLoading = localMode ? false : loadingMine || loadingGlobal;
+
+  const getInitialFiles = (lang: Language): ProjectFile[] => {
+    if (lang === Language.html_single)
+      return [
+        {
+          filename: "index.html",
+          content:
+            "<!DOCTYPE html>\n<html>\n<head><title>New Project</title></head>\n<body>\n  <h1>Hello World</h1>\n</body>\n</html>",
+        },
+      ];
+    if (lang === Language.html_css_js)
+      return [
+        {
+          filename: "index.html",
+          content:
+            '<!DOCTYPE html>\n<html>\n<head>\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <h1>Hello World</h1>\n  <script src="script.js"></script>\n</body>\n</html>',
+        },
+        {
+          filename: "style.css",
+          content: "body { font-family: sans-serif; }",
+        },
+        { filename: "script.js", content: "console.log('Hello World');" },
+      ];
+    if (lang === Language.javascript)
+      return [
+        {
+          filename: "main.js",
+          content: "// Your code here\nconsole.log('Hello World');",
+        },
+      ];
+    return [
+      {
+        filename: "main.cpp",
+        content:
+          '#include <iostream>\n\nint main() {\n  std::cout << "Hello World" << std::endl;\n  return 0;\n}',
+      },
+    ];
+  };
 
   const handleCreate = async () => {
     if (!newTitle.trim()) return;
-    const initialFiles =
-      newLang === Language.html_single
-        ? [
-            {
-              filename: "index.html",
-              content:
-                "<!DOCTYPE html>\n<html>\n<head><title>New Project</title></head>\n<body>\n  <h1>Hello World</h1>\n</body>\n</html>",
-            },
-          ]
-        : newLang === Language.html_css_js
-          ? [
-              {
-                filename: "index.html",
-                content:
-                  '<!DOCTYPE html>\n<html>\n<head>\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <h1>Hello World</h1>\n  <script src="script.js"></script>\n</body>\n</html>',
-              },
-              {
-                filename: "style.css",
-                content: "body { font-family: sans-serif; }",
-              },
-              { filename: "script.js", content: "console.log('Hello World');" },
-            ]
-          : newLang === Language.javascript
-            ? [
-                {
-                  filename: "main.js",
-                  content: "// Your code here\nconsole.log('Hello World');",
-                },
-              ]
-            : [
-                {
-                  filename: "main.cpp",
-                  content:
-                    '#include <iostream>\n\nint main() {\n  std::cout << "Hello World" << std::endl;\n  return 0;\n}',
-                },
-              ];
-
+    const files = getInitialFiles(newLang);
+    if (localMode) {
+      setLocalCreating(true);
+      const id = localMode.onCreate(
+        newTitle.trim(),
+        newLang,
+        files,
+        isAdmin ? newIsGlobal : false,
+      );
+      toast.success("Project created!");
+      setShowCreate(false);
+      setNewTitle("");
+      setNewLang(Language.html_single);
+      setNewIsGlobal(false);
+      setLocalCreating(false);
+      onOpenProject(id);
+      return;
+    }
     try {
       const id = await createProject.mutateAsync({
         title: newTitle.trim(),
         language: newLang,
-        files: initialFiles,
+        files,
         isGlobal: isAdmin ? newIsGlobal : false,
       });
       toast.success("Project created!");
@@ -135,6 +180,11 @@ export default function DashboardPage({
 
   const handleDelete = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (localMode) {
+      localMode.onDelete(id);
+      toast.success("Project deleted");
+      return;
+    }
     try {
       await deleteProject.mutateAsync(id);
       toast.success("Project deleted");
@@ -143,12 +193,15 @@ export default function DashboardPage({
     }
   };
 
-  const allProjects = [
-    ...myProjects,
-    ...globalProjects.filter((g) => !myProjects.find((m) => m.id === g.id)),
-  ];
-
-  const renderProject = (project: Project, index: number) => (
+  const renderProject = (
+    project: {
+      id: string;
+      title: string;
+      language: Language;
+      isGlobal: boolean;
+    },
+    index: number,
+  ) => (
     <motion.div
       key={project.id}
       initial={{ opacity: 0, y: 12 }}
@@ -180,7 +233,7 @@ export default function DashboardPage({
               Private
             </Badge>
           )}
-          {(isAdmin || myProjects.find((m) => m.id === project.id)) && (
+          {isAdmin && (
             <Button
               variant="ghost"
               size="icon"
@@ -248,14 +301,14 @@ export default function DashboardPage({
       </div>
 
       {/* Projects grid */}
-      {loadingMine || loadingGlobal ? (
+      {isLoading ? (
         <div
           className="flex items-center justify-center py-20"
           data-ocid="project.loading_state"
         >
           <Loader2 className="w-6 h-6 text-primary animate-spin" />
         </div>
-      ) : allProjects.length === 0 ? (
+      ) : effectiveProjects.length === 0 ? (
         <div
           className="flex flex-col items-center justify-center py-20 text-center border border-dashed border-border/50 rounded-2xl"
           data-ocid="project.empty_state"
@@ -288,7 +341,7 @@ export default function DashboardPage({
           className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4"
           data-ocid="project.list"
         >
-          {allProjects.map((p, i) => renderProject(p, i))}
+          {effectiveProjects.map((p, i) => renderProject(p, i))}
         </div>
       )}
 
@@ -343,10 +396,13 @@ export default function DashboardPage({
             </Button>
             <Button
               onClick={handleCreate}
-              disabled={!newTitle.trim() || createProject.isPending}
+              disabled={
+                !newTitle.trim() ||
+                (localMode ? localCreating : createProject.isPending)
+              }
               className="bg-primary text-primary-foreground hover:bg-primary/90"
             >
-              {createProject.isPending ? (
+              {(localMode ? localCreating : createProject.isPending) ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Creating...
                 </>

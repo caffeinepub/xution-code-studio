@@ -2,11 +2,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useInternetIdentity } from "@/hooks/useInternetIdentity";
-import { parseQRFromFile } from "@/utils/qrUtils";
-import type { QRPayload } from "@/utils/qrUtils";
+import { useGetMemberQR } from "@/hooks/useQueries";
 import {
   CheckCircle2,
   Code2,
+  ImageIcon,
   Loader2,
   QrCode,
   Shield,
@@ -25,19 +25,45 @@ const CLASS6_CREDENTIALS: Record<string, string> = {
   Syndelious: "StarCode",
 };
 
-export default function LoginPage() {
-  const { login, isLoggingIn } = useInternetIdentity();
+function fileToDataURL(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+interface LoginPageProps {
+  onLocalLogin?: (username: string) => void;
+}
+
+export default function LoginPage({ onLocalLogin }: LoginPageProps) {
+  const { isLoggingIn } = useInternetIdentity();
+  const getMemberQR = useGetMemberQR();
+
   const [activeTab, setActiveTab] = useState<LoginTab>("password");
   const [username, setUsername] = useState("Unity");
   const [password, setPassword] = useState("");
   const [isCheckingCreds, setIsCheckingCreds] = useState(false);
-  const qrFileRef = useRef<HTMLInputElement>(null);
 
   // QR login state
-  const [xutInput, setXutInput] = useState("");
-  const [decodedQR, setDecodedQR] = useState<QRPayload | null>(null);
+  const [qrUsername, setQrUsername] = useState("");
+  const [qrFileName, setQrFileName] = useState<string | null>(null);
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [qrError, setQrError] = useState<string | null>(null);
-  const [isDecodingQR, setIsDecodingQR] = useState(false);
+  const [qrSuccess, setQrSuccess] = useState(false);
+  const [isProcessingQR, setIsProcessingQR] = useState(false);
+  const qrFileRef = useRef<HTMLInputElement>(null);
+
+  const doLocalLogin = (uname: string) => {
+    localStorage.setItem("xution_local_session", uname);
+    if (CLASS6_CREDENTIALS[uname] !== undefined) {
+      localStorage.setItem("xution_is_class6", "true");
+    }
+    toast.success(`Signed in as ${uname}`);
+    onLocalLogin?.(uname);
+  };
 
   const handlePasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,25 +76,25 @@ export default function LoginPage() {
           toast.error("Invalid username or password");
           return;
         }
-        localStorage.setItem("xution_class6_pending", username);
-        toast.success("Class 6 credentials verified — connecting...");
-        await login();
+        doLocalLogin(username);
         return;
       }
+      // Regular member stored locally
       const stored = localStorage.getItem("xution_credentials");
       if (stored) {
-        const creds = JSON.parse(stored);
+        const creds = JSON.parse(stored) as {
+          username: string;
+          password: string;
+        };
         if (creds.username === username && creds.password === password) {
-          toast.success("Credentials verified — connecting...");
-          await login();
+          doLocalLogin(username);
           return;
         }
         toast.error("Invalid username or password");
       } else {
-        toast.info(
-          "No local credentials found. Connecting via Internet Identity...",
+        toast.error(
+          "No account found for this username. Contact a Class 6 member.",
         );
-        await login();
       }
     } catch {
       toast.error("Login failed");
@@ -80,61 +106,46 @@ export default function LoginPage() {
   const handleQRFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setIsDecodingQR(true);
-    setDecodedQR(null);
     setQrError(null);
-    const result = await parseQRFromFile(file);
-    setIsDecodingQR(false);
-    if (qrFileRef.current) qrFileRef.current.value = "";
-    if (!result) {
-      setQrError(
-        "Could not read QR code. Make sure it's a valid Xution QR image or JSON file.",
-      );
-      return;
+    setQrSuccess(false);
+    try {
+      const dataUrl = await fileToDataURL(file);
+      setQrDataUrl(dataUrl);
+      setQrFileName(file.name);
+    } catch {
+      setQrError("Failed to read image file.");
     }
-    setDecodedQR(result);
-    // Pre-fill XUT input if the QR has one
-    if (result.xutNumber) setXutInput(result.xutNumber);
+    if (qrFileRef.current) qrFileRef.current.value = "";
   };
 
   const handleQRLogin = async () => {
-    if (!decodedQR) return;
-    setIsCheckingCreds(true);
+    if (!qrUsername.trim()) {
+      setQrError("Please enter your username.");
+      return;
+    }
+    if (!qrDataUrl) {
+      setQrError("Please upload your QR card image.");
+      return;
+    }
+    setIsProcessingQR(true);
+    setQrError(null);
+    setQrSuccess(false);
     try {
-      // Verify secret
-      const storedSecret = localStorage.getItem(
-        `xution_qr_${decodedQR.principal}`,
-      );
-      if (storedSecret && storedSecret !== decodedQR.secret) {
-        toast.error(
-          "QR secret does not match stored credentials. Access denied.",
-        );
+      const storedQR = await getMemberQR.mutateAsync(qrUsername.trim());
+      if (storedQR === null) {
+        setQrError("No member found with that username.");
         return;
       }
-
-      // Verify XUT number if provided
-      if (xutInput.trim()) {
-        const qrXut = decodedQR.xutNumber;
-        if (qrXut && xutInput.trim() !== qrXut) {
-          toast.error("XUT number does not match QR code.");
-          return;
-        }
-        // Also check username-based XUT store
-        const storedXut = localStorage.getItem(
-          `xution_xut_user_${decodedQR.username}`,
-        );
-        if (storedXut && xutInput.trim() !== storedXut) {
-          toast.error("XUT number does not match stored record.");
-          return;
-        }
+      if (storedQR !== qrDataUrl) {
+        setQrError("QR card does not match stored credentials.");
+        return;
       }
-
-      toast.success(`QR verified for ${decodedQR.username} — connecting...`);
-      await login();
+      setQrSuccess(true);
+      doLocalLogin(qrUsername.trim());
     } catch {
-      toast.error("Login failed");
+      setQrError("Verification failed. Please try again.");
     } finally {
-      setIsCheckingCreds(false);
+      setIsProcessingQR(false);
     }
   };
 
@@ -197,7 +208,7 @@ export default function LoginPage() {
               }`}
               data-ocid="login.qr_tab"
             >
-              QR / XUT Login
+              QR Card Login
             </button>
           </div>
 
@@ -250,46 +261,65 @@ export default function LoginPage() {
 
           {activeTab === "qr" && (
             <div className="space-y-4">
-              {/* Upload area */}
-              <button
-                type="button"
-                className="w-full flex flex-col items-center justify-center py-5 gap-3 border-2 border-dashed border-border/50 rounded-xl cursor-pointer hover:border-primary/40 transition-colors"
-                onClick={() => qrFileRef.current?.click()}
-                data-ocid="login.qr_dropzone"
-              >
-                <QrCode className="w-10 h-10 text-primary/50" />
-                <div className="text-center">
-                  <p className="text-sm font-medium text-foreground">
-                    Upload QR Code Image
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    Supports PNG, JPG, or exported JSON file
-                  </p>
-                </div>
-                <Button
-                  type="button"
-                  disabled={isDecodingQR || isLoading}
-                  className="bg-primary text-primary-foreground hover:bg-primary/90 gap-2 pointer-events-none"
-                  data-ocid="login.qr_upload_button"
-                >
-                  {isDecodingQR ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" /> Scanning...
-                    </>
-                  ) : (
-                    <>
-                      <QrCode className="w-4 h-4" /> Select File
-                    </>
-                  )}
-                </Button>
-                <input
-                  ref={qrFileRef}
-                  type="file"
-                  accept="image/*,.json"
-                  className="hidden"
-                  onChange={handleQRFileChange}
+              {/* Username field for QR login */}
+              <div className="space-y-1.5">
+                <Label className="text-xs">Username</Label>
+                <Input
+                  value={qrUsername}
+                  onChange={(e) => {
+                    setQrUsername(e.target.value);
+                    setQrError(null);
+                    setQrSuccess(false);
+                  }}
+                  placeholder="Enter your username"
+                  data-ocid="login.qr_username_input"
                 />
-              </button>
+              </div>
+
+              {/* QR card upload */}
+              <div className="space-y-1.5">
+                <Label className="text-xs">QR Card Image</Label>
+                <button
+                  type="button"
+                  className="w-full flex flex-col items-center justify-center py-5 gap-3 border-2 border-dashed border-border/50 rounded-xl cursor-pointer hover:border-primary/40 transition-colors"
+                  onClick={() => qrFileRef.current?.click()}
+                  data-ocid="login.qr_dropzone"
+                >
+                  {qrDataUrl ? (
+                    <img
+                      src={qrDataUrl}
+                      alt="QR Card"
+                      className="h-24 w-auto object-contain rounded-lg border border-border"
+                    />
+                  ) : (
+                    <QrCode className="w-10 h-10 text-primary/50" />
+                  )}
+                  <div className="text-center">
+                    <p className="text-sm font-medium text-foreground">
+                      {qrFileName ?? "Upload Your QR Card"}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Upload the QR card image given to you by a Class 6 admin
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    disabled={isProcessingQR}
+                    className="bg-primary text-primary-foreground hover:bg-primary/90 gap-2 pointer-events-none"
+                    data-ocid="login.qr_upload_button"
+                  >
+                    <ImageIcon className="w-4 h-4" />
+                    {qrDataUrl ? "Replace Image" : "Select Image"}
+                  </Button>
+                  <input
+                    ref={qrFileRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleQRFileChange}
+                  />
+                </button>
+              </div>
 
               {/* Error state */}
               <AnimatePresence>
@@ -307,86 +337,47 @@ export default function LoginPage() {
                 )}
               </AnimatePresence>
 
-              {/* Decoded QR preview */}
+              {/* Success state */}
               <AnimatePresence>
-                {decodedQR && (
+                {qrSuccess && (
                   <motion.div
                     initial={{ opacity: 0, y: -6 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0 }}
-                    className="p-3 bg-primary/8 border border-primary/30 rounded-xl space-y-2"
+                    className="flex items-center gap-2 p-3 bg-primary/10 border border-primary/30 rounded-lg"
                     data-ocid="login.qr.success_state"
                   >
-                    <div className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-primary shrink-0" />
-                      <p className="text-xs font-semibold text-primary">
-                        QR Verified
-                      </p>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <p className="text-muted-foreground">Username</p>
-                        <p className="font-bold text-foreground">
-                          {decodedQR.username}
-                        </p>
-                      </div>
-                      {decodedQR.xutNumber && (
-                        <div>
-                          <p className="text-muted-foreground">XUT ID</p>
-                          <p
-                            className="font-black tracking-wider text-primary"
-                            style={{
-                              textShadow: "0 0 8px oklch(var(--primary) / 0.3)",
-                            }}
-                          >
-                            {decodedQR.xutNumber}
-                          </p>
-                        </div>
-                      )}
-                    </div>
+                    <CheckCircle2 className="w-4 h-4 text-primary shrink-0" />
+                    <p className="text-xs text-primary font-semibold">
+                      QR verified — signing in...
+                    </p>
                   </motion.div>
                 )}
               </AnimatePresence>
 
-              {/* Optional XUT number verification */}
-              <div className="space-y-1.5">
-                <Label className="text-xs">
-                  XUT Number{" "}
-                  <span className="text-muted-foreground font-normal">
-                    (optional — additional verification)
-                  </span>
-                </Label>
-                <Input
-                  value={xutInput}
-                  onChange={(e) => setXutInput(e.target.value)}
-                  placeholder="XUT-0001"
-                  className="text-xs font-mono tracking-widest"
-                  data-ocid="login.xut_input"
-                />
-              </div>
-
               <Button
                 type="button"
                 onClick={handleQRLogin}
-                disabled={isLoading || !decodedQR}
+                disabled={isProcessingQR || !qrUsername.trim() || !qrDataUrl}
                 className="w-full h-10 font-semibold bg-primary text-primary-foreground hover:bg-primary/90 gold-glow"
                 data-ocid="login.qr_submit_button"
               >
-                {isLoading ? (
+                {isProcessingQR ? (
                   <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Signing
-                    In...
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Verifying...
                   </>
                 ) : (
-                  "Sign In with QR"
+                  "Sign In with QR Card"
                 )}
               </Button>
 
               <div className="p-3 bg-muted/20 rounded-lg border border-border/50">
                 <p className="text-xs text-muted-foreground">
                   <strong className="text-foreground">How it works:</strong>{" "}
-                  Upload the QR image from your member card. Your XUT number can
-                  be used as an extra verification step.
+                  Enter your username and upload the QR card image assigned to
+                  you by a Class 6 admin. Your card is verified against the
+                  stored record.
                 </p>
               </div>
             </div>

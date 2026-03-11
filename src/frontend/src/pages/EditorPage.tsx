@@ -1,14 +1,35 @@
+import type { ProjectFile } from "@/backend";
 import EditorWorkspace from "@/components/EditorWorkspace";
 import { Button } from "@/components/ui/button";
+import type { LocalProject, LocalVersion } from "@/hooks/useLocalProjects";
 import { useIsAdmin } from "@/hooks/useQueries";
 import { Code2, Plus, X } from "lucide-react";
 import { useState } from "react";
+
+interface LocalEditorMode {
+  projects: LocalProject[];
+  versions: Record<string, LocalVersion[]>;
+  isAdmin: boolean;
+  onSave: (
+    projectId: string,
+    updates: Partial<
+      Pick<LocalProject, "title" | "language" | "files" | "isGlobal">
+    >,
+  ) => void;
+  onAddVersion: (
+    projectId: string,
+    prompt: string,
+    files: ProjectFile[],
+  ) => void;
+  onRevert: (projectId: string, versionId: string) => void;
+}
 
 interface EditorPageProps {
   openProjectIds: string[];
   onAddProject: () => void;
   onCloseProject: (projectId: string) => void;
   onBackToProjects: () => void;
+  localMode?: LocalEditorMode;
 }
 
 export default function EditorPage({
@@ -16,11 +37,13 @@ export default function EditorPage({
   onAddProject,
   onCloseProject,
   onBackToProjects,
+  localMode,
 }: EditorPageProps) {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(
     openProjectIds[0] ?? null,
   );
-  const { data: isAdmin = false } = useIsAdmin();
+  const { data: isAdminData = false } = useIsAdmin();
+  const isAdmin = localMode ? localMode.isAdmin : isAdminData;
 
   const effectiveActive =
     activeProjectId && openProjectIds.includes(activeProjectId)
@@ -54,21 +77,27 @@ export default function EditorPage({
     <div className="flex flex-col h-full">
       {/* Project tabs */}
       <div className="flex items-center gap-0 border-b border-border/50 bg-card/30 overflow-x-auto">
-        {openProjectIds.map((pid) => (
-          <ProjectTab
-            key={pid}
-            projectId={pid}
-            isActive={effectiveActive === pid}
-            onClick={() => setActiveProjectId(pid)}
-            onClose={() => {
-              onCloseProject(pid);
-              if (effectiveActive === pid) {
-                const remaining = openProjectIds.filter((id) => id !== pid);
-                setActiveProjectId(remaining[0] ?? null);
-              }
-            }}
-          />
-        ))}
+        {openProjectIds.map((pid) => {
+          const localProj = localMode?.projects.find((p) => p.id === pid);
+          const label = localProj
+            ? localProj.title
+            : `${pid.slice(0, 8)}\u2026`;
+          return (
+            <ProjectTab
+              key={pid}
+              label={label}
+              isActive={effectiveActive === pid}
+              onClick={() => setActiveProjectId(pid)}
+              onClose={() => {
+                onCloseProject(pid);
+                if (effectiveActive === pid) {
+                  const remaining = openProjectIds.filter((id) => id !== pid);
+                  setActiveProjectId(remaining[0] ?? null);
+                }
+              }}
+            />
+          );
+        })}
         <Button
           type="button"
           variant="ghost"
@@ -88,6 +117,26 @@ export default function EditorPage({
             projectId={effectiveActive}
             isAdmin={isAdmin}
             onBackToProjects={onBackToProjects}
+            localMode={
+              localMode
+                ? {
+                    project:
+                      localMode.projects.find(
+                        (p) => p.id === effectiveActive,
+                      ) ?? null,
+                    versions: (localMode.versions[effectiveActive] ?? []).map(
+                      (v) => ({ ...v, createdAt: BigInt(v.createdAt) }),
+                    ),
+                    isAdmin: localMode.isAdmin,
+                    onSave: (updates) =>
+                      localMode.onSave(effectiveActive, updates),
+                    onAddVersion: (prompt, files) =>
+                      localMode.onAddVersion(effectiveActive, prompt, files),
+                    onRevert: (versionId) =>
+                      localMode.onRevert(effectiveActive, versionId),
+                  }
+                : undefined
+            }
           />
         ) : (
           <div className="flex items-center justify-center h-full text-muted-foreground">
@@ -100,12 +149,12 @@ export default function EditorPage({
 }
 
 function ProjectTab({
-  projectId,
+  label,
   isActive,
   onClick,
   onClose,
 }: {
-  projectId: string;
+  label: string;
   isActive: boolean;
   onClick: () => void;
   onClose: () => void;
@@ -121,7 +170,7 @@ function ProjectTab({
       }`}
     >
       <Code2 className="w-3 h-3" />
-      <span className="font-mono">{projectId.slice(0, 8)}…</span>
+      <span className="font-mono max-w-[120px] truncate">{label}</span>
       <button
         type="button"
         onClick={(e) => {
