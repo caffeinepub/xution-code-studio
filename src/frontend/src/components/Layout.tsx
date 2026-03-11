@@ -50,6 +50,12 @@ export default function Layout({
   const principal = identity?.getPrincipal().toString() ?? "";
   const shortPrincipal = principal ? `${principal.slice(0, 8)}...` : "";
 
+  const handleSignOut = () => {
+    localStorage.removeItem("xution_is_class6");
+    localStorage.removeItem("xution_class6_pending");
+    clear();
+  };
+
   const handleLogoClick = () => {
     if (isAdmin) {
       fileInputRef.current?.click();
@@ -244,6 +250,7 @@ export default function Layout({
                 >
                   {shortPrincipal}
                 </DropdownMenuItem>
+                <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={() => onNavigate("dashboard")}
                   data-ocid="nav.back_to_projects_link"
@@ -268,7 +275,7 @@ export default function Layout({
                 )}
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  onClick={clear}
+                  onClick={handleSignOut}
                   className="text-destructive focus:text-destructive"
                   data-ocid="auth.logout_button"
                 >

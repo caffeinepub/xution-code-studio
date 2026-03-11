@@ -35,6 +35,8 @@ export function useIsAdmin() {
   return useQuery({
     queryKey: ["isAdmin"],
     queryFn: async () => {
+      // Local Class 6 flag takes priority — works even if backend is slow
+      if (localStorage.getItem("xution_is_class6") === "true") return true;
       if (!actor) return false;
       return actor.isCallerAdmin();
     },
@@ -113,6 +115,7 @@ export function useSaveProfile() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["callerProfile"] });
       qc.invalidateQueries({ queryKey: ["callerRole"] });
+      qc.invalidateQueries({ queryKey: ["isAdmin"] });
     },
   });
 }

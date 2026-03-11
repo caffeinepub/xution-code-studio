@@ -10,16 +10,10 @@ import { toast } from "sonner";
 
 type LoginTab = "password" | "qr";
 
-function hashPassword(password: string): string {
-  // Simple deterministic hash for demo purposes
-  let hash = 0;
-  for (let i = 0; i < password.length; i++) {
-    const char = password.charCodeAt(i);
-    hash = (hash << 5) - hash + char;
-    hash = hash & hash;
-  }
-  return hash.toString(16);
-}
+const CLASS6_CREDENTIALS: Record<string, string> = {
+  Unity: "Bacon",
+  Syndelious: "StarCode",
+};
 
 export default function LoginPage() {
   const { login, isLoggingIn } = useInternetIdentity();
@@ -34,18 +28,30 @@ export default function LoginPage() {
     if (!username.trim() || !password.trim()) return;
     setIsCheckingCreds(true);
     try {
+      // Check hardcoded Class 6 credentials first
+      const class6Secret = CLASS6_CREDENTIALS[username];
+      if (class6Secret !== undefined) {
+        if (password !== class6Secret) {
+          toast.error("Invalid username or password");
+          return;
+        }
+        localStorage.setItem("xution_class6_pending", username);
+        toast.success("Class 6 credentials verified — connecting...");
+        await login();
+        return;
+      }
+
+      // Fall through to stored credentials for regular members
       const stored = localStorage.getItem("xution_credentials");
       if (stored) {
         const creds = JSON.parse(stored);
-        const hashed = hashPassword(password);
-        if (creds.username === username && creds.passwordHash === hashed) {
+        if (creds.username === username && creds.password === password) {
           toast.success("Credentials verified — connecting...");
           await login();
           return;
         }
         toast.error("Invalid username or password");
       } else {
-        // No credentials stored yet — trigger II login
         toast.info(
           "No local credentials found. Connecting via Internet Identity...",
         );
@@ -66,13 +72,11 @@ export default function LoginPage() {
       toast.error("Could not read QR code. Try a valid Xution QR image.");
       return;
     }
-    // Verify secret matches stored
     const storedSecret = localStorage.getItem(`xution_qr_${result.principal}`);
     if (storedSecret && storedSecret !== result.secret) {
       toast.error("QR code secret does not match. Access denied.");
       return;
     }
-    // If no stored secret, store it (first-time import)
     if (!storedSecret) {
       localStorage.setItem(`xution_qr_${result.principal}`, result.secret);
     }

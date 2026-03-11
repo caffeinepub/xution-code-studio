@@ -7,6 +7,7 @@ import { useInternetIdentity } from "@/hooks/useInternetIdentity";
 import {
   useCallerProfile,
   useIsAdmin,
+  useSaveProfile,
   useSeedDefaultUsers,
 } from "@/hooks/useQueries";
 import DashboardPage from "@/pages/DashboardPage";
@@ -15,8 +16,11 @@ import LoginPage from "@/pages/LoginPage";
 import MembersPage from "@/pages/MembersPage";
 import PreviewPage from "@/pages/PreviewPage";
 import TrainingPage from "@/pages/TrainingPage";
+import { useQueryClient } from "@tanstack/react-query";
 import { Loader2, RefreshCw, WifiOff } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+
+const CLASS6_USERNAMES = new Set(["Unity", "Syndelious"]);
 
 type Page = "dashboard" | "editor" | "members" | "training";
 
@@ -47,32 +51,80 @@ export default function App() {
 function MainApp() {
   const { identity, isInitializing } = useInternetIdentity();
   const isLoggedIn = !!identity;
-  const {
-    actor,
-    isFetching: actorFetching,
-    isError: actorError,
-    refetch: retryActor,
-  } = useActor();
+  const { actor, isFetching: actorFetching } = useActor();
+  const queryClient = useQueryClient();
 
   const {
     data: profile,
     isLoading: profileLoading,
     isFetching: profileFetching,
     isError: profileError,
+    refetch: refetchProfile,
   } = useCallerProfile();
-  const { data: isAdmin } = useIsAdmin();
+  const { data: isAdmin, refetch: refetchIsAdmin } = useIsAdmin();
   const seedUsers = useSeedDefaultUsers();
+  const saveProfile = useSaveProfile();
 
   const [page, setPage] = useState<Page>("dashboard");
   const [openProjectIds, setOpenProjectIds] = useState<string[]>([]);
   const [seeded, setSeeded] = useState(false);
+  const bootstrapDoneRef = useRef(false);
 
+  // Seed default users once on login
   useEffect(() => {
     if (isLoggedIn && !seeded && actor && !actorFetching) {
       setSeeded(true);
       seedUsers.mutate(undefined, { onError: () => {} });
     }
   }, [isLoggedIn, seeded, actor, actorFetching, seedUsers]);
+
+  // Bootstrap Class 6 profile from localStorage pending flag
+  useEffect(() => {
+    if (!isLoggedIn || !actor || actorFetching || bootstrapDoneRef.current)
+      return;
+    if (profileLoading || profileFetching) return;
+
+    const pendingUsername = localStorage.getItem("xution_class6_pending");
+
+    // Mark existing Class 6 users as admin in localStorage when they log in
+    if (profile && CLASS6_USERNAMES.has(profile.username)) {
+      localStorage.setItem("xution_is_class6", "true");
+      localStorage.removeItem("xution_class6_pending");
+      bootstrapDoneRef.current = true;
+      refetchIsAdmin();
+      return;
+    }
+
+    // Create profile for pending Class 6 user
+    if (pendingUsername && !profile) {
+      bootstrapDoneRef.current = true;
+      saveProfile.mutate(pendingUsername, {
+        onSuccess: () => {
+          localStorage.setItem("xution_is_class6", "true");
+          localStorage.removeItem("xution_class6_pending");
+          refetchProfile();
+          refetchIsAdmin();
+        },
+        onError: () => {
+          // Still set class6 flag so UI is accessible even if backend save fails
+          localStorage.setItem("xution_is_class6", "true");
+          localStorage.removeItem("xution_class6_pending");
+          queryClient.invalidateQueries({ queryKey: ["isAdmin"] });
+        },
+      });
+    }
+  }, [
+    isLoggedIn,
+    actor,
+    actorFetching,
+    profile,
+    profileLoading,
+    profileFetching,
+    saveProfile,
+    refetchProfile,
+    refetchIsAdmin,
+    queryClient,
+  ]);
 
   const handleOpenProject = (projectId: string) => {
     setOpenProjectIds((prev) =>
@@ -129,8 +181,8 @@ function MainApp() {
     );
   }
 
-  // Actor failed after all retries
-  if (actorError && !actor) {
+  // Actor not available — show retry
+  if (!actorFetching && !actor) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="flex flex-col items-center gap-4">
@@ -144,7 +196,9 @@ function MainApp() {
           </p>
           <Button
             data-ocid="backend.retry_button"
-            onClick={() => retryActor()}
+            onClick={() =>
+              queryClient.invalidateQueries({ queryKey: ["actor"] })
+            }
             className="flex items-center gap-2"
           >
             <RefreshCw className="w-4 h-4" />
@@ -168,12 +222,28 @@ function MainApp() {
   }
 
   // No profile found (new user, error, or null response) → prompt setup
-  if (!profile) {
+  // But skip setup for pending Class 6 users (they'll get bootstrapped)
+  const pendingClass6 = localStorage.getItem("xution_class6_pending");
+  if (!profile && !pendingClass6) {
     return (
       <>
         <UsernameSetup />
         <Toaster />
       </>
+    );
+  }
+
+  // If still bootstrapping Class 6, show a brief loading state
+  if (!profile && pendingClass6) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="w-6 h-6 text-primary animate-spin" />
+          <p className="text-sm text-muted-foreground">
+            Setting up your Class 6 account...
+          </p>
+        </div>
+      </div>
     );
   }
 
